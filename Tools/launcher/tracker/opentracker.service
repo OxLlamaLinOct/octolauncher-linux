@@ -1,0 +1,31 @@
+[Unit]
+Description=opentracker — BitTorrent tracker for OctoWow launcher swarm
+After=network.target
+
+[Service]
+Type=simple
+User=opentracker
+Group=opentracker
+WorkingDirectory=/opt/opentracker
+ExecStart=/opt/opentracker/bin/opentracker -i 0.0.0.0 -p 6969 -P 6969
+Restart=on-failure
+RestartSec=5
+
+# Hardening — opentracker does no filesystem IO after boot, so most of
+# the namespace can be locked down.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
