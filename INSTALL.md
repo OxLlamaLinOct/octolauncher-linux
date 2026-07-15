@@ -3,6 +3,11 @@
 This guide is for players — no building from source, no terminal skills
 required beyond a couple of copy-paste commands.
 
+> Don't want to run a prebuilt binary you can't fully verify? You don't have
+> to — see [BUILD.md](BUILD.md) for building OctoLauncher from source
+> yourself. It's the exact same code, `npm run dist` produces the identical
+> AppImage.
+
 ## 1. Prerequisite: Steam + Proton
 
 The actual WoW client is a Windows program, so it needs
