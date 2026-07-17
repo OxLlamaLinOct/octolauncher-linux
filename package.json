@@ -1,6 +1,6 @@
 {
 	"name": "octo-launcher",
-	"version": "1.2.2",
+	"version": "1.2.3",
 	"description": "An Electron application for launching and updating the OctoWoW client",
 	"author": "OctoWoW",
 	"copyright": "Copyright © 2026 OctoWoW",
