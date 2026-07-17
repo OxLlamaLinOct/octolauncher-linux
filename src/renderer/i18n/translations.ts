@@ -163,6 +163,7 @@ const enUS: Dict = {
 	'prefs.protonMissing': 'No Proton install found. Install it via Steam.',
 	'prefs.openPrefixFolder': 'Open prefix folder',
 	'prefs.resetPrefix': 'Reset Wine prefix',
+	'prefs.changePrefixLocation': 'Move prefix location',
 	'prefs.save': 'Save',
 	'prefs.installLocationTitle': 'Install location',
 	'prefs.selectDirectory':

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import {
 	FilePen,
 	FolderOpen,
+	FolderSymlink,
 	RefreshCw,
 	ScrollText,
 	ShieldCheck,
@@ -46,6 +47,9 @@ const CompatibilitySection = () => {
 	const setOverride = api.proton.setOverride.useMutation();
 	const resetPrefix = api.proton.resetPrefix.useMutation();
 	const openPrefixFolder = api.proton.openPrefixFolder.useMutation();
+	const relocatePrefix = api.proton.relocatePrefix.useMutation();
+	const filePicker = api.general.filePicker.useMutation();
+	const [relocateError, setRelocateError] = useState<string>();
 
 	return (
 		<div className="flex min-w-0 flex-col">
@@ -85,6 +89,32 @@ const CompatibilitySection = () => {
 					>
 						{t('prefs.resetPrefix')}
 					</TextButton>
+					<TextButton
+						icon={FolderSymlink}
+						loading={relocatePrefix.isLoading}
+						onClick={async () => {
+							setRelocateError(undefined);
+							const r = await filePicker.mutateAsync({
+								properties: ['openDirectory', 'createDirectory']
+							});
+							if (r.canceled) return;
+							try {
+								await relocatePrefix.mutateAsync(r.path[0]);
+							} catch (e) {
+								setRelocateError(
+									e instanceof Error ? e.message : JSON.stringify(e)
+								);
+							}
+						}}
+						className="!items-start text-left text-blueGray"
+					>
+						{t('prefs.changePrefixLocation')}
+					</TextButton>
+					{relocateError && (
+						<p className="text-secondary max-w-[200px] text-sm">
+							{relocateError}
+						</p>
+					)}
 				</>
 			)}
 		</div>

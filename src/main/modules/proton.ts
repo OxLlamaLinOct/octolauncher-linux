@@ -149,12 +149,40 @@ class ProtonClass extends Observable<ProtonStatus> {
 	}
 
 	getPrefixDir() {
-		return path.join(Preferences.userDataDir, 'proton-prefix');
+		return (
+			Preferences.data?.protonPrefixDir ??
+			path.join(Preferences.userDataDir, 'proton-prefix')
+		);
 	}
 
 	async resetPrefix() {
 		await fs.remove(this.getPrefixDir());
 		Logger.info('Proton prefix reset');
+	}
+
+	async relocatePrefix(newDir: string) {
+		const currentDir = this.getPrefixDir();
+		const resolvedNew = path.resolve(newDir);
+		if (resolvedNew === path.resolve(currentDir)) return;
+
+		if (await fs.pathExists(resolvedNew)) {
+			const entries = await fs.readdir(resolvedNew);
+			if (entries.length)
+				throw new Error(
+					'That folder is not empty. Pick an empty or new folder for the prefix.'
+				);
+		}
+
+		if (await fs.pathExists(currentDir)) {
+			await fs.move(currentDir, resolvedNew, { overwrite: true });
+			Logger.info(`Proton prefix moved to ${resolvedNew}`);
+		} else {
+			Logger.info(
+				`No existing prefix to move; new prefix will be created at ${resolvedNew}`
+			);
+		}
+
+		Preferences.data = { protonPrefixDir: resolvedNew };
 	}
 }
 

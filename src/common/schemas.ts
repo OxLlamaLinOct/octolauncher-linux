@@ -52,6 +52,7 @@ export const PreferencesSchema = z.object({
 	server: z.enum(['live', 'ptr']).default('live'),
 	clientDir: z.string().optional(),
 	protonOverridePath: z.string().optional(),
+	protonPrefixDir: z.string().optional(),
 	version: z.string().optional(),
 	lastPatchedLauncherVersion: z.string().optional(),
 	expectedPatchedWowHash: z.string().optional(),
