@@ -11,7 +11,7 @@ import { type ModState } from '~common/schemas';
 
 import Preferences from './preferences';
 import Observable from './observable';
-import Updater from './updater';
+import Updater, { isGameRunning } from './updater';
 import { addDll, removeDll } from './dllsTxt';
 import { detectPrimaryDisplayIndex } from './displays';
 
@@ -104,6 +104,9 @@ class ModsClass extends Observable<ModsStatus> {
 		this._notifyObservers();
 
 		const clientDir = Preferences.data?.clientDir;
+		const gameRunning = clientDir
+			? await isGameRunning(path.join(clientDir, 'WoW.exe'))
+			: false;
 
 		if (clientDir) {
 			const vmmfDll = path.join(clientDir, 'VanillaMultiMonitorFix.dll');
@@ -118,7 +121,7 @@ class ModsClass extends Observable<ModsStatus> {
 			const state = Preferences.data?.mods?.[m.id];
 			let installedVersion = state?.installedVersion;
 
-			if (clientDir && installedVersion) {
+			if (clientDir && installedVersion && !gameRunning) {
 				const filesPresent = await Promise.all(
 					(state?.installedFiles ?? []).map(rel =>
 						fs.pathExists(path.join(clientDir, rel))

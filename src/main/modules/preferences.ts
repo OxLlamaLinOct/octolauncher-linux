@@ -20,7 +20,16 @@ abstract class Preferences {
 		let json: Record<string, unknown>;
 		try {
 			json = await fs.readJSON(settingsPath);
-		} catch {
+		} catch (e) {
+			const exists = await fs.pathExists(settingsPath);
+			if (!exists) return PreferencesSchema.parse({});
+
+			Logger.error(
+				'settings.json exists but could not be read/parsed; backing up ' +
+					'and falling back to defaults',
+				e
+			);
+			await fs.copy(settingsPath, `${settingsPath}.corrupt`).catch(() => {});
 			return PreferencesSchema.parse({});
 		}
 
