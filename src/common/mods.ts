@@ -102,14 +102,14 @@ export const MODS: ModEntry[] = [
 	{
 		id: 'superWow',
 		name: 'SuperWoW',
-		version: 'Release 2.1',
+		version: 'Release 2.2',
 		description:
 			'Extends the client with additional Lua API data (unit GUIDs, spell info, and more) required by many modern addons.',
 		repoUrl: 'https://github.com/balakethelock/SuperWoW',
 		requires: ['vanillaFixes'],
 		source: {
 			kind: 'archive',
-			url: 'https://github.com/balakethelock/SuperWoW/releases/download/Release/SuperWoW.release.2.1.zip',
+			url: 'https://github.com/balakethelock/SuperWoW/releases/download/Release/SuperWoW.release.2.2.zip',
 			pinnedTag: 'Release',
 			format: 'zip',
 			extractMap: {
