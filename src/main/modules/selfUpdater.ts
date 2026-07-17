@@ -1,23 +1,47 @@
-import { app } from 'electron';
-import { autoUpdater } from 'electron-updater';
+import { app, shell } from 'electron';
+import fetch from 'node-fetch';
+import { z } from 'zod';
 import Logger from 'electron-log/main';
 import { is } from '@electron-toolkit/utils';
 
 import Observable from './observable';
 
+const REPO = 'OxLlamaLinOct/octolauncher-linux';
+const RELEASES_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
+const FETCH_TIMEOUT_MS = 8_000;
+
 export type SelfUpdaterStatus =
 	| { state: 'idle'; currentVersion: string }
 	| { state: 'checking'; currentVersion: string }
 	| { state: 'unavailable'; currentVersion: string }
-	| { state: 'available'; currentVersion: string; nextVersion: string }
 	| {
-			state: 'downloading';
+			state: 'available';
 			currentVersion: string;
 			nextVersion: string;
-			progress: number;
+			releaseUrl: string;
 	  }
-	| { state: 'ready'; currentVersion: string; nextVersion: string }
 	| { state: 'error'; currentVersion: string; message: string };
+
+const GitHubReleaseSchema = z.object({
+	tag_name: z.string(),
+	html_url: z.string()
+});
+
+// Release tags look like "v1.2.3-linux" - strip that down to a bare "1.2.3"
+// to compare against app.getVersion().
+const bareVersion = (tag: string) =>
+	tag.replace(/^v/i, '').replace(/-linux$/i, '');
+
+const isNewer = (candidate: string, current: string) => {
+	const a = candidate.split('.').map(Number);
+	const b = current.split('.').map(Number);
+	for (let i = 0; i < Math.max(a.length, b.length); i++) {
+		const na = a[i] ?? 0;
+		const nb = b[i] ?? 0;
+		if (na !== nb) return na > nb;
+	}
+	return false;
+};
 
 class SelfUpdaterClass extends Observable<SelfUpdaterStatus> {
 	protected _value: SelfUpdaterStatus = {
@@ -26,7 +50,6 @@ class SelfUpdaterClass extends Observable<SelfUpdaterStatus> {
 	};
 
 	#initialized = false;
-	#nextVersion: string | undefined;
 
 	get status(): SelfUpdaterStatus {
 		return this._value;
@@ -37,7 +60,7 @@ class SelfUpdaterClass extends Observable<SelfUpdaterStatus> {
 		this._notifyObservers();
 	}
 
-	init() {
+	async init() {
 		if (this.#initialized) return;
 		this.#initialized = true;
 
@@ -46,82 +69,54 @@ class SelfUpdaterClass extends Observable<SelfUpdaterStatus> {
 			return;
 		}
 
+		await this.check();
+	}
+
+	async check() {
 		const currentVersion = app.getVersion();
+		this.status = { state: 'checking', currentVersion };
 
-		autoUpdater.logger = Logger;
-		autoUpdater.autoDownload = true;
-		autoUpdater.autoInstallOnAppQuit = false;
+		const controller = new AbortController();
+		const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+		try {
+			const res = await fetch(RELEASES_URL, {
+				signal: controller.signal,
+				headers: { Accept: 'application/vnd.github+json' }
+			});
+			if (!res.ok) throw new Error(`GitHub API returned HTTP ${res.status}`);
 
-		autoUpdater.on('checking-for-update', () => {
-			Logger.info('[selfUpdater] checking');
-			this.status = { state: 'checking', currentVersion };
-		});
-		autoUpdater.on('update-available', info => {
-			Logger.info(`[selfUpdater] update available: ${info.version}`);
-			this.#nextVersion = info.version;
-			this.status = {
-				state: 'available',
-				currentVersion,
-				nextVersion: info.version
-			};
-		});
-		autoUpdater.on('update-not-available', info => {
-			Logger.info(`[selfUpdater] up to date (current: ${info.version})`);
-			this.status = { state: 'unavailable', currentVersion };
-		});
-		autoUpdater.on('error', err => {
-			// electron-updater tags a missing/unhosted update feed with this code
-			// (a 404 on the manifest file). That's an expected state for a build
-			// whose publisher hasn't uploaded update artifacts yet, not a failure
-			// the user can act on, so don't surface it as a scary error banner.
-			if (err?.code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND') {
-				Logger.info('[selfUpdater] no update feed available', err.message);
+			const parsed = GitHubReleaseSchema.safeParse(await res.json());
+			if (!parsed.success) throw new Error('Malformed release response');
+
+			const nextVersion = bareVersion(parsed.data.tag_name);
+			if (!isNewer(nextVersion, currentVersion)) {
+				Logger.info(`[selfUpdater] up to date (current: ${currentVersion})`);
 				this.status = { state: 'unavailable', currentVersion };
 				return;
 			}
-			Logger.error('[selfUpdater] error', err);
+
+			Logger.info(`[selfUpdater] update available: ${nextVersion}`);
+			this.status = {
+				state: 'available',
+				currentVersion,
+				nextVersion,
+				releaseUrl: parsed.data.html_url
+			};
+		} catch (err) {
+			Logger.error('[selfUpdater] check failed', err);
 			this.status = {
 				state: 'error',
 				currentVersion,
-				message: err?.message ?? String(err)
+				message: err instanceof Error ? err.message : String(err)
 			};
-		});
-		autoUpdater.on('download-progress', p => {
-			Logger.info(`[selfUpdater] downloading ${Math.round(p.percent)}%`);
-			this.status = {
-				state: 'downloading',
-				currentVersion,
-				nextVersion: this.#nextVersion ?? '',
-				progress: Math.max(0, Math.min(1, p.percent / 100))
-			};
-		});
-		autoUpdater.on('update-downloaded', info => {
-			Logger.info(
-				`[selfUpdater] downloaded ${info.version}, awaiting user click`
-			);
-			this.status = {
-				state: 'ready',
-				currentVersion,
-				nextVersion: info.version
-			};
-		});
-
-		autoUpdater.checkForUpdates().catch(err => {
-			Logger.error('[selfUpdater] checkForUpdates failed', err);
-		});
+		} finally {
+			clearTimeout(t);
+		}
 	}
 
-	triggerInstall() {
-		if (this._value.state !== 'ready') {
-			Logger.warn(
-				`[selfUpdater] triggerInstall called in state ${this._value.state}, ignoring`
-			);
-			return;
-		}
-		Logger.info(
-			'[selfUpdater] user clicked install, quitting + running installer'
-		);
-		autoUpdater.quitAndInstall(false, true);
+	openReleasePage() {
+		if (this._value.state !== 'available') return;
+		shell.openExternal(this._value.releaseUrl);
 	}
 }
 

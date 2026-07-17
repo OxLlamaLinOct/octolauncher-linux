@@ -9,14 +9,12 @@ type Status =
 	| { state: 'idle'; currentVersion: string }
 	| { state: 'checking'; currentVersion: string }
 	| { state: 'unavailable'; currentVersion: string }
-	| { state: 'available'; currentVersion: string; nextVersion: string }
 	| {
-			state: 'downloading';
+			state: 'available';
 			currentVersion: string;
 			nextVersion: string;
-			progress: number;
+			releaseUrl: string;
 	  }
-	| { state: 'ready'; currentVersion: string; nextVersion: string }
 	| { state: 'error'; currentVersion: string; message: string };
 
 const SelfUpdateBanner = () => {
@@ -28,7 +26,7 @@ const SelfUpdateBanner = () => {
 	api.selfUpdater.observe.useSubscription(undefined, {
 		onData: setStatus
 	});
-	const install = api.selfUpdater.install.useMutation();
+	const openReleasePage = api.selfUpdater.openReleasePage.useMutation();
 
 	if (
 		status.state === 'idle' ||
@@ -42,31 +40,20 @@ const SelfUpdateBanner = () => {
 	const label =
 		status.state === 'error'
 			? t('misc.selfUpdateCheckFailed', { message: status.message })
-			: status.state === 'available'
-			? t('misc.selfUpdateAvailable', {
-					version: status.nextVersion
-			  })
-			: status.state === 'downloading'
-			? t('misc.selfUpdateDownloading', {
-					version: status.nextVersion,
-					percent: Math.round(status.progress * 100)
-			  })
-			: status.state === 'ready'
-			? t('misc.selfUpdateReady', { version: status.nextVersion })
-			: '';
+			: t('misc.selfUpdateAvailable', { version: status.nextVersion });
 
 	return (
 		<div
 			className={`relative z-10 flex items-center gap-3 rounded-md border ${tone} bg-black/60 px-4 py-2 text-sm`}
 		>
 			<span className="flex-grow break-all">{label}</span>
-			{status.state === 'ready' && (
+			{status.state === 'available' && (
 				<Button
 					primary
-					onClick={() => install.mutateAsync()}
-					disabled={install.isLoading}
+					onClick={() => openReleasePage.mutateAsync()}
+					disabled={openReleasePage.isLoading}
 				>
-					{t('misc.selfUpdateInstallNow')}
+					{t('misc.selfUpdateViewRelease')}
 				</Button>
 			)}
 		</div>
