@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from 'react';
 import cls from 'classnames';
 import log from 'electron-log/renderer';
+import { Share2 } from 'lucide-react';
 
 import { type UpdaterStatus, type ModsStatus } from '~main/types';
 import { formatFileSize } from '~common/utils';
@@ -8,8 +9,10 @@ import { api } from '~renderer/utils/api';
 import { useT } from '~renderer/i18n';
 
 import Button from './styled/Button';
+import TextButton from './styled/TextButton';
 import DialogButton from './styled/DialogButton';
 import ClientDirDialog from './ClientDirDialog';
+import PreferencesDialog from './PreferencesDialog';
 
 const formatDuration = (seconds: number) => {
 	const s = Math.max(0, Math.round(seconds));
@@ -175,6 +178,22 @@ const LaunchPanel = () => {
 				<div className="-mb-2">
 					{modsStatus?.dirty ? (
 						<p>{t('launch.modsChanged')}</p>
+					) : status.seeding ? (
+						<DialogButton
+							dialog={close => <PreferencesDialog close={close} />}
+						>
+							{open => (
+								<TextButton
+									icon={Share2}
+									onClick={open}
+									className="!items-baseline !p-0 text-warmGreen"
+								>
+									{t('launch.seeding')}
+								</TextButton>
+							)}
+						</DialogButton>
+					) : status.seedingBlockedByDxvk ? (
+						<p className="s1 text-orange">{t('launch.seedingBlockedByDxvk')}</p>
 					) : (
 						<p>{t('launch.upToDate')}</p>
 					)}

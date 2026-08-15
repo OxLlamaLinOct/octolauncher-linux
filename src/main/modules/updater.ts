@@ -22,7 +22,8 @@ import {
 	torrentTreeIntact,
 	torrentDownloadSelection,
 	startSeeding,
-	stopSeeding
+	stopSeeding,
+	isSeeding
 } from '~main/modules/aria2';
 import { healRealmlist } from '~main/modules/patcher';
 
@@ -113,6 +114,8 @@ export type UpdaterStatus = {
 	bytesTotal?: number;
 	bytesPerSecond?: number;
 	etaSeconds?: number;
+	seeding?: boolean;
+	seedingBlockedByDxvk?: boolean;
 };
 
 const SIDECAR_TIMEOUT_MS = 30_000;
@@ -185,14 +188,20 @@ class UpdaterClass extends Observable<UpdaterStatus> {
 		// no seeding while dxvk is off: aria2 would recreate the parked
 		// d3d9.dll as a 0-byte stub and break the game's d3d9 import
 		const dxvkOff = Preferences.data.mods?.dxvk?.enabled === false;
+		const wantsToSeed = Preferences.data.shareDownloads !== false;
 		if (
-			Preferences.data.shareDownloads !== false &&
+			wantsToSeed &&
 			Preferences.data.clientDir &&
 			this.status.state === 'upToDate' &&
 			!dxvkOff
 		)
 			await startSeeding(Preferences.data.clientDir);
 		else stopSeeding();
+		this.status = {
+			...this.status,
+			seeding: isSeeding(),
+			seedingBlockedByDxvk: wantsToSeed && dxvkOff
+		};
 	}
 
 	async #torrentVerify(clientPath: string) {

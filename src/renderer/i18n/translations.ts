@@ -26,6 +26,9 @@ const enUS: Dict = {
 	'launch.updateAvailable': 'Update available!',
 	'launch.modsChanged': 'Mods changed, apply before playing',
 	'launch.upToDate': 'Everything up to date!',
+	'launch.seeding': 'Sharing downloads with other players — click to manage',
+	'launch.seedingBlockedByDxvk':
+		'Sharing downloads is on, but paused while DXVK is disabled',
 	'launch.version': 'Version: {version}',
 	'launch.errorLabel': 'Error:',
 	'launch.serverFail': 'Failed to reach update server',
@@ -167,6 +170,7 @@ const enUS: Dict = {
 	'prefs.cleanWdb': 'Clean WDB on each launch',
 	'prefs.minimizeToTray': 'Minimize to tray while playing',
 	'prefs.allowMultipleInstances': 'Allow multiple simultaneous game instances',
+	'prefs.shareDownloads': 'Help share downloads with other players',
 	'prefs.compatibility': 'COMPATIBILITY:',
 	'prefs.protonSearching': 'Looking for Proton…',
 	'prefs.protonMissing': 'No Proton install found. Install it via Steam.',

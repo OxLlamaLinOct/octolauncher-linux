@@ -156,7 +156,8 @@ const PreferencesDialog = ({ close }: Props) => {
 				await setPref.mutateAsync({
 					cleanWdb: v.cleanWdb,
 					minimizeToTrayOnPlay: v.minimizeToTrayOnPlay,
-					allowMultipleInstances: v.allowMultipleInstances
+					allowMultipleInstances: v.allowMultipleInstances,
+					shareDownloads: v.shareDownloads
 				});
 				close();
 			})}
@@ -262,6 +263,11 @@ const PreferencesDialog = ({ close }: Props) => {
 						value={!!watch('allowMultipleInstances')}
 						setValue={setBool('allowMultipleInstances')}
 						label={t('prefs.allowMultipleInstances')}
+					/>
+					<CheckboxInput
+						value={watch('shareDownloads') !== false}
+						setValue={setBool('shareDownloads')}
+						label={t('prefs.shareDownloads')}
 					/>
 				</div>
 
