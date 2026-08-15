@@ -20,6 +20,7 @@ export type ModSource =
 			apiUrl?: string;
 			pinnedTag?: string;
 			assetName: string;
+			sha256?: string;
 	  }
 	| {
 			kind: 'archive';
@@ -29,6 +30,7 @@ export type ModSource =
 			pinnedTag?: string;
 			format: 'zip' | 'tar.gz';
 			extractMap: Record<string, string>;
+			sha256?: string;
 	  }
 	| { kind: 'managed' };
 
@@ -42,6 +44,8 @@ export type ModEntry = {
 	repoUrl: string;
 	source: ModSource;
 	registerInDllsTxt?: string;
+	// hidden from the Mods tab, never enabled on fresh installs; existing installs keep it
+	disabled?: boolean;
 };
 
 export const MODS: ModEntry[] = [
@@ -102,21 +106,28 @@ export const MODS: ModEntry[] = [
 	{
 		id: 'superWow',
 		name: 'SuperWoW',
-		version: 'Release 2.2',
+		version: '2.2',
 		description:
-			'Extends the client with additional Lua API data (unit GUIDs, spell info, and more) required by many modern addons.',
+			'Extends the client Lua API with unit GUIDs and other data many addons rely on.',
 		repoUrl: 'https://github.com/balakethelock/SuperWoW',
 		requires: ['vanillaFixes'],
 		source: {
 			kind: 'archive',
 			url: 'https://github.com/balakethelock/SuperWoW/releases/download/Release/SuperWoW.release.2.2.zip',
-			pinnedTag: 'Release',
+			apiUrl:
+				'https://api.github.com/repos/balakethelock/SuperWoW/releases/latest',
+			parseLatest: 'githubRelease',
+			pinnedTag: '2.2',
 			format: 'zip',
 			extractMap: {
 				'SuperWoWhook.dll': 'SuperWoWhook.dll'
 			}
 		},
-		registerInDllsTxt: 'SuperWoWhook.dll'
+		registerInDllsTxt: 'SuperWoWhook.dll',
+		// author (balakethelock) does not permit redistribution; confirmed 2026-08-15.
+		// Users who already have a legally obtained copy can add it via the
+		// Mods tab's "Add DLL" (custom mod) button instead.
+		disabled: true
 	},
 	{
 		id: 'transmogFix',
@@ -197,3 +208,10 @@ export const MODS: ModEntry[] = [
 
 export const getMod = (id: ModId): ModEntry | undefined =>
 	MODS.find(m => m.id === id);
+
+// fallback for profiles with no stored state: enabled, so legacy installs
+// keep their mods; fresh installs seed explicit off rows instead (do NOT
+// flip this list to change defaults, it strips mods from legacy profiles)
+export const DEFAULT_ENABLED_MODS: ModId[] = MODS.filter(m => !m.disabled).map(
+	m => m.id
+);

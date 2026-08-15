@@ -66,7 +66,7 @@ const isAllowedGitUrl = (url: string) => {
 		const parsed = new URL(url);
 		if (parsed.protocol !== 'https:') return false;
 		const host = parsed.hostname.toLowerCase();
-		return ALLOWED_GIT_HOSTS.some(h => host === h || host.endsWith('.' + h));
+		return ALLOWED_GIT_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
 	} catch {
 		return false;
 	}
@@ -148,8 +148,7 @@ class AddonsClass extends Observable<AddonsStatus> {
 						/property="og:image" content="([^"]*)"/
 					)?.[1];
 				}
-			} catch {
-			}
+			} catch {}
 
 			const folder = gitUrl.slice(0, -4).split('/').at(-1);
 			if (isUnsafeFolder(folder)) return undefined;
@@ -195,7 +194,7 @@ class AddonsClass extends Observable<AddonsStatus> {
 			: [];
 		const addons: AddonsStatus['addons'] = Object.fromEntries(
 			dirs
-				.filter(d => !d.startsWith('Blizzard_'))
+				.filter(d => !d.startsWith('Blizzard_') && !/\.(tmp|bak)$/.test(d))
 				.map(name => [name, { status: 'fetching' as const, folder: name }])
 		);
 

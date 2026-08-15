@@ -2,7 +2,6 @@ import { Tray, Menu, nativeImage, app } from 'electron';
 import Logger from 'electron-log/main';
 
 import icon from '~build/icon.png?asset';
-
 import { mainWindow } from '~main/index';
 
 let tray: Tray | null = null;
@@ -18,7 +17,9 @@ const restoreWindow = () => {
 
 const ensureTray = () => {
 	if (tray) return tray;
-	const trayIcon = nativeImage.createFromPath(icon).resize({ width: 16, height: 16 });
+	const trayIcon = nativeImage
+		.createFromPath(icon)
+		.resize({ width: 16, height: 16 });
 	tray = new Tray(trayIcon);
 	tray.setToolTip('OctoLauncher');
 	tray.setContextMenu(

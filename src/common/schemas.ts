@@ -17,6 +17,7 @@ const f = {
 
 export const ConfigWtfSchema = z.object({
 	vanillaFixes: f.boolean(),
+	raidVisuals: f.boolean(),
 	largeAddress: f.boolean(true),
 	nameplateRange: f.number(41),
 	alwaysAutoLoot: f.boolean(),
@@ -59,11 +60,20 @@ export const PreferencesSchema = z.object({
 	minimizeToTrayOnPlay: f.boolean(true),
 	cleanWdb: f.boolean(true),
 	allowMultipleInstances: f.boolean(false),
+	shareDownloads: f.boolean(true),
 	locale: z
 		.enum(['enUS', 'deDE', 'zhCN', 'esES', 'ptBR', 'ruRU'])
 		.default('enUS'),
 	localePatchLetter: z.string().optional(),
 	localePatchLocale: z.string().optional(),
+	patchedLocale: z.string().optional(),
+	syncedTorrentHash: z.string().optional(),
+	activeTorrentHash: z.string().optional(),
+	activeClientDir: z.string().optional(),
+	raidVisualsHash: z.string().optional(),
+	clientPatchHash: z.string().optional(),
+	vmmfWrittenIndex: z.number().int().nonnegative().optional(),
+	lastWrittenResolution: z.string().optional(),
 	rememberPosition: f.boolean(),
 	windowPosition: z
 		.object({

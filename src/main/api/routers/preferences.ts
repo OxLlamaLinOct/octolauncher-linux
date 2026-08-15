@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { PreferencesSchema } from '~common/schemas';
 import Preferences from '~main/modules/preferences';
-import { applyLocalePatch } from '~main/modules/localePatch';
+import Updater from '~main/modules/updater';
 
 import { createTRPCRouter, publicProcedure } from '../trpc';
 
@@ -11,9 +11,10 @@ export const preferencesRouter = createTRPCRouter({
 	set: publicProcedure
 		.input(PreferencesSchema.partial())
 		.mutation(async ({ input }) => {
+			// Language change no longer touches the game folder; the exe is re-patched on
+			// the next Play (launcher router), so this stays network-free and can't fail.
 			Preferences.data = input;
-			if (input.locale !== undefined)
-				await applyLocalePatch(Preferences.data.clientDir, input.locale);
+			if (input.shareDownloads !== undefined) void Updater.refreshSeeding();
 			return Preferences.data;
 		}),
 	isValidClientDir: publicProcedure

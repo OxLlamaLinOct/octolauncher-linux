@@ -15,6 +15,12 @@ export const modsRouter = createTRPCRouter({
 	toggle: publicProcedure
 		.input(z.object({ id: ModIdSchema, enabled: z.boolean() }))
 		.mutation(({ input }) => Mods.toggle(input.id, input.enabled)),
+	toggleCustom: publicProcedure
+		.input(z.object({ name: z.string(), enabled: z.boolean() }))
+		.mutation(({ input }) => Mods.toggleCustom(input.name, input.enabled)),
+	addCustomDll: publicProcedure
+		.input(z.object({ path: z.string() }))
+		.mutation(({ input }) => Mods.addCustomDll(input.path)),
 	setIgnoreUpdates: publicProcedure
 		.input(z.object({ id: ModIdSchema, ignore: z.boolean() }))
 		.mutation(({ input }) => Mods.setIgnoreUpdates(input.id, input.ignore)),

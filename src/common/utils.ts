@@ -47,7 +47,7 @@ export const asyncMap = async <T, U>(
 export const isNotUndef = <T>(obj: T): obj is Exclude<T, undefined> =>
 	obj !== undefined;
 
-export const formatFileSize = (bytes: number) => {
+export const formatFileSize = (bytes: number, decimals = 2) => {
 	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
 	let size = bytes;
 	let unitIndex = 0;
@@ -57,7 +57,7 @@ export const formatFileSize = (bytes: number) => {
 		unitIndex++;
 	}
 
-	return `${size.toFixed(2)} ${units[unitIndex]}`;
+	return `${parseFloat(size.toFixed(decimals))} ${units[unitIndex]}`;
 };
 
 export const formatDuration = (remaining: number) => {

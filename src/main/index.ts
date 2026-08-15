@@ -6,8 +6,10 @@ import { createIPCHandler } from 'electron-trpc/main';
 import Logger from 'electron-log/main';
 
 import icon from '~build/icon.png?asset';
+import { PreferencesSchema } from '~common/schemas';
 
 import { appRouter } from './api/root';
+import { stopSyncing, stopSeeding } from './modules/aria2';
 import Preferences from './modules/preferences';
 import Updater from './modules/updater';
 import Addons from './modules/addons';
@@ -138,7 +140,13 @@ if (!gotSingleInstanceLock) {
 	});
 
 	app.whenReady().then(async () => {
-		Preferences.data = await Preferences.load();
+		// defaults on failure so createWindow() below still runs
+		try {
+			Preferences.data = await Preferences.load();
+		} catch (e) {
+			Logger.error('Preferences.load() failed; starting on defaults', e);
+			Preferences.data = PreferencesSchema.parse({});
+		}
 
 		Addons.verify();
 		Updater.verify();
@@ -196,6 +204,18 @@ if (!gotSingleInstanceLock) {
 		});
 
 		await createWindow();
+	});
+
+	let settingsFlushed = false;
+	app.on('before-quit', event => {
+		stopSyncing();
+		stopSeeding();
+		if (settingsFlushed) return;
+		settingsFlushed = true;
+		event.preventDefault();
+		Promise.race([Preferences.save(), new Promise(r => setTimeout(r, 3000))])
+			.catch(e => Logger.error('Failed to flush settings before quit', e))
+			.finally(() => app.quit());
 	});
 
 	app.on('window-all-closed', () => {

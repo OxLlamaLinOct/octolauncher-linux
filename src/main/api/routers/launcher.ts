@@ -3,13 +3,21 @@ import { spawn } from 'child_process';
 
 import fs from 'fs-extra';
 import Logger from 'electron-log/main';
+import { z } from 'zod';
 
 import Preferences from '~main/modules/preferences';
 import Mods from '~main/modules/mods';
+import { nvidiaDriverTooOldForDxvk } from '~main/modules/hardware';
 import { mainWindow } from '~main/index';
-import { isGameRunning } from '~main/modules/updater';
-import { patchConfig } from '~main/modules/patcher';
-import { applyLocalePatch } from '~main/modules/localePatch';
+import Updater, { isGameRunning } from '~main/modules/updater';
+import {
+	patchConfig,
+	patchExecutable,
+	ensureDxvkConf
+} from '~main/modules/patcher';
+import { removeLegacyLocalePatches } from '~main/modules/localePatch';
+import { syncVanillaFixesCache } from '~main/modules/dllsTxt';
+import { stopSeeding } from '~main/modules/aria2';
 import { minimizeToTray, restoreFromTray } from '~main/modules/tray';
 import { getLaunchInvocation } from '~main/modules/proton';
 import { getMod } from '~common/mods';
@@ -30,87 +38,185 @@ const chainloaderNeeded = async (clientDir: string): Promise<boolean> => {
 	return false;
 };
 
-type StartResult = { ok: boolean; error?: string };
+type StartResult = {
+	ok: boolean;
+	error?: string;
+	code?: 'dxvkDriverTooOld';
+};
+
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+let starting = false;
 
 export const launcherRouter = createTRPCRouter({
-	start: publicProcedure.mutation(async (): Promise<StartResult> => {
-		const { cleanWdb, minimizeToTrayOnPlay, clientDir, allowMultipleInstances } =
-			Preferences.data;
-		if (!clientDir) return { ok: false, error: 'No game folder is set.' };
+	start: publicProcedure
+		.input(z.object({ force: z.boolean().optional() }).optional())
+		.mutation(async ({ input }): Promise<StartResult> => {
+			if (starting)
+				return { ok: false, error: 'The game is already launching.' };
+			starting = true;
+			try {
+				const {
+					cleanWdb,
+					minimizeToTrayOnPlay,
+					clientDir,
+					allowMultipleInstances
+				} = Preferences.data;
+				if (!clientDir) return { ok: false, error: 'No game folder is set.' };
 
-		const exePath = path.join(clientDir, 'WoW.exe');
-		if (!(await fs.pathExists(exePath)))
-			return { ok: false, error: 'WoW.exe was not found in the game folder.' };
-		if (!allowMultipleInstances && (await isGameRunning(exePath)))
-			return { ok: false, error: 'WoW is already running.' };
+				const exePath = path.join(clientDir, 'WoW.exe');
+				if (!(await fs.pathExists(exePath)))
+					return {
+						ok: false,
+						error: 'WoW.exe was not found in the game folder.'
+					};
+				if (!allowMultipleInstances && (await isGameRunning(exePath)))
+					return { ok: false, error: 'WoW is already running.' };
+				const gameAlreadyRunning = await isGameRunning(exePath);
 
-		if (cleanWdb) {
-			Logger.log('Cleaning up WDB...');
-			await fs.remove(path.join(clientDir, 'WDB'));
-		}
+				if (Mods.status.dirty)
+					return {
+						ok: false,
+						error: 'You have unapplied mod changes. Click Apply first.'
+					};
 
-		Logger.log('Checking Config.wtf...');
-		await patchConfig();
+				const dxvkRow = Mods.status.mods.find(r => r.id === 'dxvk');
+				if (
+					!input?.force &&
+					dxvkRow?.enabled &&
+					(await nvidiaDriverTooOldForDxvk())
+				)
+					return {
+						ok: false,
+						code: 'dxvkDriverTooOld',
+						error:
+							'Your NVIDIA driver is too old for DXVK (needs 550.54.14 or ' +
+							'newer, ideally 575.51.02+) and WoW will likely crash on launch. ' +
+							'Update your driver, disable DXVK in the Mods tab, or launch ' +
+							'anyway.'
+					};
 
-		Logger.log('Applying UI language...');
-		await applyLocalePatch(clientDir, Preferences.data.locale);
+				stopSeeding();
 
-		const loaderPath = path.join(clientDir, 'VanillaFixes.exe');
-		const needsLoader = await chainloaderNeeded(clientDir);
-		const useLoader = needsLoader && (await fs.pathExists(loaderPath));
-		if (needsLoader && !useLoader)
-			Logger.warn(
-				'VanillaFixes.exe is missing but mods/dlls.txt expect a chainloader; ' +
-					'launching WoW.exe directly (mods will not load).'
-			);
+				if (cleanWdb && !gameAlreadyRunning) {
+					Logger.log('Cleaning up WDB...');
+					await fs.remove(path.join(clientDir, 'WDB'));
+				} else if (cleanWdb) {
+					Logger.log(
+						'Skipping WDB cleanup because another WoW instance is running.'
+					);
+				}
 
-		const octoLocale = Preferences.data.locale || 'enUS';
-		Logger.log(
-			useLoader
-				? `Launching via VanillaFixes (OCTO_LOCALE=${octoLocale})...`
-				: `Launching ${exePath} (OCTO_LOCALE=${octoLocale})...`
-		);
+				Logger.log('Syncing preferred monitor...');
+				await Mods.verify();
 
-		let invocation;
-		try {
-			invocation = useLoader
-				? await getLaunchInvocation(loaderPath, ['WoW.exe'])
-				: await getLaunchInvocation(exePath);
-		} catch (e) {
-			Logger.error('Failed to prepare Proton launch', e);
-			const message = e instanceof Error ? e.message : String(e);
-			return { ok: false, error: message };
-		}
+				Logger.log('Checking Config.wtf...');
+				await patchConfig();
+				await ensureDxvkConf(clientDir);
 
-		const child = spawn(invocation.command, invocation.args, {
-			env: { ...process.env, ...invocation.env, OCTO_LOCALE: octoLocale },
-			cwd: clientDir,
-			detached: !minimizeToTrayOnPlay
-		});
+				await removeLegacyLocalePatches(clientDir);
 
-		try {
-			await new Promise<void>((resolve, reject) => {
-				child.once('spawn', resolve);
-				child.once('error', reject);
-			});
-		} catch (e) {
-			Logger.error('Failed to launch the game', e);
-			const message = e instanceof Error ? e.message : String(e);
-			return { ok: false, error: `Failed to launch the game: ${message}` };
-		}
+				if (Preferences.data.patchedLocale !== Preferences.data.locale) {
+					Logger.log(
+						`Applying the client language (${Preferences.data.locale})...`
+					);
+					try {
+						await patchExecutable();
+						await patchConfig(true);
+						await Updater.recordPatchedWow();
+						if (!cleanWdb)
+							await fs.remove(path.join(clientDir, 'WDB')).catch(() => {});
+					} catch (e) {
+						Logger.error(
+							'Could not apply the client language; launching with the previous one',
+							e
+						);
+					}
+				}
 
-		child.on('error', e => Logger.error('Game process error', e));
+				const loaderPath = path.join(clientDir, 'VanillaFixes.exe');
+				const needsLoader = await chainloaderNeeded(clientDir);
+				const useLoader = needsLoader && (await fs.pathExists(loaderPath));
+				if (useLoader) await syncVanillaFixesCache(clientDir);
+				if (needsLoader && !useLoader)
+					Logger.warn(
+						'VanillaFixes.exe is missing but mods/dlls.txt expect a chainloader; ' +
+							'launching WoW.exe directly (mods will not load).'
+					);
 
-		if (!minimizeToTrayOnPlay) {
-			mainWindow?.close();
-			return { ok: true };
-		}
+				Logger.log(
+					useLoader
+						? 'Launching via VanillaFixes...'
+						: `Launching ${exePath}...`
+				);
 
-		minimizeToTray();
-		child.on('exit', () => {
-			Logger.log('WoW stopped');
-			restoreFromTray();
-		});
-		return { ok: true };
-	})
+				let invocation;
+				try {
+					invocation = useLoader
+						? await getLaunchInvocation(
+								loaderPath,
+								['WoW.exe'],
+								!!allowMultipleInstances
+						  )
+						: await getLaunchInvocation(exePath, [], !!allowMultipleInstances);
+				} catch (e) {
+					Logger.error('Failed to prepare Proton launch', e);
+					const message = e instanceof Error ? e.message : String(e);
+					return { ok: false, error: message };
+				}
+
+				const child = spawn(invocation.command, invocation.args, {
+					env: { ...process.env, ...invocation.env },
+					cwd: clientDir,
+					detached: !minimizeToTrayOnPlay
+				});
+
+				try {
+					await new Promise<void>((resolve, reject) => {
+						child.once('spawn', resolve);
+						child.once('error', reject);
+					});
+				} catch (e) {
+					Logger.error('Failed to launch the game', e);
+					const message = e instanceof Error ? e.message : String(e);
+					return { ok: false, error: `Failed to launch the game: ${message}` };
+				}
+
+				child.on('error', e => Logger.error('Game process error', e));
+
+				if (!minimizeToTrayOnPlay) {
+					mainWindow?.close();
+					return { ok: true };
+				}
+
+				minimizeToTray();
+				if (useLoader) {
+					void (async () => {
+						try {
+							const started = Date.now();
+							while (
+								Date.now() - started < 30_000 &&
+								!(await isGameRunning(exePath))
+							)
+								await delay(1000);
+							while (await isGameRunning(exePath)) await delay(3000);
+						} finally {
+							Logger.log('WoW stopped');
+							restoreFromTray();
+						}
+					})();
+				} else {
+					child.on('exit', () => {
+						Logger.log('WoW stopped');
+						restoreFromTray();
+					});
+				}
+				return { ok: true };
+			} catch (e) {
+				Logger.error('Failed to start the game', e);
+				return { ok: false, error: e instanceof Error ? e.message : String(e) };
+			} finally {
+				starting = false;
+			}
+		})
 });

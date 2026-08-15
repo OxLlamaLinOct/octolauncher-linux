@@ -1,7 +1,10 @@
 import fetch from 'node-fetch';
 import Logger from 'electron-log/main';
 
-import { ForumAnnouncementSchema, type ForumAnnouncement } from '~common/schemas';
+import {
+	ForumAnnouncementSchema,
+	type ForumAnnouncement
+} from '~common/schemas';
 
 import { createTRPCRouter, publicProcedure } from '../trpc';
 
@@ -9,7 +12,7 @@ const FETCH_TIMEOUT_MS = 8_000;
 
 const fetchLatestAnnouncement = async (): Promise<ForumAnnouncement | null> => {
 	const url = `${
-		import.meta.env.MAIN_VITE_SERVER_URL || 'https://octowow.st'
+		import.meta.env.MAIN_VITE_FORUM_URL || 'https://octowow.st'
 	}/forum/octonews.php?forum=35&mode=full`;
 	const controller = new AbortController();
 	const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

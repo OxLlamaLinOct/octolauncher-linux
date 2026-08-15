@@ -8,7 +8,24 @@ required beyond a couple of copy-paste commands.
 > yourself. It's the exact same code, `npm run dist` produces the identical
 > AppImage.
 
-## 1. Prerequisite: Steam + Proton
+## 1. Prerequisite: aria2
+
+The game client downloads over BitTorrent, so the launcher needs `aria2c`
+installed on your system (it's a small, common download tool — nothing to
+configure, the launcher drives it automatically):
+
+```bash
+sudo apt install aria2
+```
+
+(use your distro's package manager — `dnf install aria2`, `pacman -S aria2`,
+etc. if you're not on a Debian-based distro)
+
+While the client is downloading, and for a little while after, the launcher
+also shares pieces back to other players — the same thing the official
+Windows client does.
+
+## 2. Prerequisite: Steam + Proton
 
 The actual WoW client is a Windows program, so it needs
 [Proton](https://github.com/ValveSoftware/Proton) (the same compatibility
@@ -28,7 +45,7 @@ All you need is:
 
 That's it — you don't need to launch or configure anything else in Steam.
 
-## 2. Download
+## 3. Download
 
 Grab `OctoLauncher.AppImage` from the
 [Releases page](../../releases/latest).
@@ -36,7 +53,7 @@ Grab `OctoLauncher.AppImage` from the
 An AppImage is a single self-contained file — there's nothing to install or
 unpack.
 
-## 3. Make it executable and run it
+## 4. Make it executable and run it
 
 Right-click the downloaded file → **Properties** → **Permissions** → check
 **"Allow executing file as program"**, then double-click it to launch.
@@ -48,14 +65,14 @@ chmod +x OctoLauncher.AppImage
 ./OctoLauncher.AppImage
 ```
 
-## 4. First launch
+## 5. First launch
 
 The launcher will ask you where to put (or where you already have) the
 OctoWoW client files. Pick any folder — the launcher downloads and updates
-the game client there automatically. Click **Verify** if it doesn't start
-downloading on its own, then **Play** once it finishes.
+the game client there automatically over BitTorrent. Click **Verify** if it
+doesn't start downloading on its own, then **Play** once it finishes.
 
-## 5. Addons, mods, and tweaks
+## 6. Addons, mods, and tweaks
 
 Everything is managed from inside the launcher, same as the Windows version:
 
@@ -69,7 +86,9 @@ Everything is managed from inside the launcher, same as the Windows version:
 ## Troubleshooting
 
 - **"No Proton installation found"** — install a Proton version through
-  Steam as described in step 1, then restart the launcher.
+  Steam as described in step 2, then restart the launcher.
+- **Stuck on "Connecting..." and never starts downloading** — make sure
+  `aria2` is installed (step 1), then click **Verify** again.
 - **Something looks broken / a mod or addon didn't apply** — click
   **Verify** (or the repair option on the Mods tab) to re-check files.
 - **Still stuck** — check the log file at:

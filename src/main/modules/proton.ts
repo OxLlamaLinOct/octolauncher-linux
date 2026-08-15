@@ -1,5 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 
 import fs from 'fs-extra';
 import Logger from 'electron-log/main';
@@ -21,10 +22,7 @@ export type ProtonStatus =
 const STEAM_ROOTS = [
 	path.join(os.homedir(), '.local/share/Steam'),
 	path.join(os.homedir(), '.steam/steam'),
-	path.join(
-		os.homedir(),
-		'.var/app/com.valvesoftware.Steam/.local/share/Steam'
-	)
+	path.join(os.homedir(), '.var/app/com.valvesoftware.Steam/.local/share/Steam')
 ];
 
 const PROTON_VERSION_HINT = '9.0';
@@ -197,7 +195,8 @@ export type LaunchInvocation = {
 
 export const getLaunchInvocation = async (
 	exePath: string,
-	extraArgs: string[] = []
+	extraArgs: string[] = [],
+	allowMultipleInstances = false
 ): Promise<LaunchInvocation> => {
 	if (Proton.status.state !== 'ready') await Proton.verify();
 	if (Proton.status.state !== 'ready')
@@ -217,7 +216,7 @@ export const getLaunchInvocation = async (
 		command: 'python3',
 		args: [
 			path.join(selected.protonPath, 'proton'),
-			'waitforexitandrun',
+			allowMultipleInstances ? 'run' : 'waitforexitandrun',
 			exePath,
 			...extraArgs
 		],

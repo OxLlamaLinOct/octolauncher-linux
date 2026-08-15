@@ -11,15 +11,12 @@ import Logger from 'electron-log/main';
 
 import Preferences from './preferences';
 
-const PREFERRED = 'L';
-const LETTERS = 'BCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+// old installs may have a copied patch-<letter>.mpq that overrides patch-5; sweep by marker
+const ALL_LETTERS = 'BCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const MARKER = 'octolocale.marker';
 
 const patchFile = (dataDir: string, letter: string) =>
 	path.join(dataDir, `patch-${letter}.mpq`);
-
-const prebuiltFor = (dataDir: string, locale: string) =>
-	path.join(dataDir, locale, 'patch-L.mpq');
 
 const isOurPatch = (mpqPath: string): boolean => {
 	if (!fs.existsSync(mpqPath)) return false;
@@ -35,91 +32,29 @@ const isOurPatch = (mpqPath: string): boolean => {
 	}
 };
 
-const findCaseInsensitive = (dataDir: string, name: string): string | undefined => {
-	try {
-		return fs
-			.readdirSync(dataDir)
-			.find(f => f.toLowerCase() === name.toLowerCase());
-	} catch {
-		return undefined;
-	}
-};
+// remove locale patches we copied in (marker-carrying archives only); never throws
+export const removeLegacyLocalePatches = async (
+	clientDir: string | undefined
+): Promise<void> => {
+	if (!clientDir) return;
+	const dataDir = path.join(clientDir, 'Data');
+	if (!(await fs.pathExists(dataDir))) return;
 
-const usableSlot = (dataDir: string, letter: string): boolean => {
-	const existing = findCaseInsensitive(dataDir, `patch-${letter}.mpq`);
-	return !existing || isOurPatch(path.join(dataDir, existing));
-};
-
-const removeOurPatch = async (dataDir: string) => {
-	for (const l of LETTERS) {
-		const f = patchFile(dataDir, l);
-		if (isOurPatch(f)) await fs.remove(f).catch(() => {});
+	for (const letter of ALL_LETTERS) {
+		const f = patchFile(dataDir, letter);
+		if (!isOurPatch(f)) continue;
+		try {
+			await fs.remove(f);
+			Logger.log(`Removed the retired locale patch patch-${letter}.mpq`);
+		} catch (e) {
+			Logger.error(`Could not remove patch-${letter}.mpq`, e);
+		}
 	}
+
+	// clear the stale tracking keys
 	if (Preferences.data.localePatchLetter || Preferences.data.localePatchLocale)
 		Preferences.data = {
 			localePatchLetter: undefined,
 			localePatchLocale: undefined
 		};
-};
-
-export const applyLocalePatch = async (
-	clientDir: string | undefined,
-	locale: string | undefined
-): Promise<void> => {
-	if (!clientDir) return;
-	const dataDir = path.join(clientDir, 'Data');
-
-	const nextLocale = !locale || locale === 'enUS' ? undefined : locale;
-	if (Preferences.data.localePatchLocale !== nextLocale)
-		await fs.remove(path.join(clientDir, 'WDB')).catch(() => {});
-
-	if (!locale || locale === 'enUS') {
-		await removeOurPatch(dataDir);
-		return;
-	}
-
-	const source = prebuiltFor(dataDir, locale);
-	if (!(await fs.pathExists(source))) {
-		Logger.warn(
-			`Locale patch: no prebuilt patch-L for ${locale}; leaving UI as-is`
-		);
-		return;
-	}
-
-	const tracked = Preferences.data.localePatchLetter;
-	const letter =
-		(tracked && usableSlot(dataDir, tracked) ? tracked : undefined) ??
-		(usableSlot(dataDir, PREFERRED)
-			? PREFERRED
-			: LETTERS.find(l => usableSlot(dataDir, l)));
-	if (!letter) {
-		Logger.warn('Locale patch: no usable patch slot');
-		return;
-	}
-	const target = patchFile(dataDir, letter);
-
-	try {
-		if (
-			Preferences.data.localePatchLocale === locale &&
-			isOurPatch(target) &&
-			fs.statSync(target).mtimeMs >= fs.statSync(source).mtimeMs
-		)
-			return;
-	} catch {
-	}
-
-	try {
-		for (const l of LETTERS) {
-			if (l === letter) continue;
-			const f = patchFile(dataDir, l);
-			if (isOurPatch(f)) await fs.remove(f).catch(() => {});
-		}
-		await fs.copy(source, target, { overwrite: true });
-		Preferences.data = { localePatchLetter: letter, localePatchLocale: locale };
-		Logger.log(
-			`Locale patch: swapped prebuilt ${locale} -> patch-${letter}.mpq`
-		);
-	} catch (e) {
-		Logger.error('Locale patch: failed to swap in prebuilt patch', e);
-	}
 };

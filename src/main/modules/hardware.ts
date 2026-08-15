@@ -28,6 +28,42 @@ const getVramMbFromNvidiaSmi = (): Promise<number | null> =>
 		);
 	});
 
+// dxvk-gplasync v2.7.1-1 (the build this launcher pins) requires
+// VK_KHR_maintenance5, which NVIDIA's proprietary driver only supports from
+// 550.54.14 onward; below that DXVK silently falls back to whatever other
+// GPU is visible (often an integrated one), which crashes on hybrid-GPU
+// desktops. https://github.com/doitsujin/dxvk/wiki/Driver-support
+const MIN_NVIDIA_DRIVER_FOR_DXVK = [550, 54, 14];
+
+const versionAtLeast = (have: number[], want: number[]): boolean => {
+	for (let i = 0; i < want.length; i++) {
+		const h = have[i] ?? 0;
+		const w = want[i];
+		if (h !== w) return h > w;
+	}
+	return true;
+};
+
+// true only when an NVIDIA GPU is present and its driver is below the
+// version DXVK needs; false (not our problem to flag) if there's no NVIDIA
+// GPU, nvidia-smi isn't available, or the driver is new enough.
+export const nvidiaDriverTooOldForDxvk = (): Promise<boolean> =>
+	new Promise(resolve => {
+		execFile(
+			'nvidia-smi',
+			['--query-gpu=driver_version', '--format=csv,noheader'],
+			(error, stdout) => {
+				const raw = error ? '' : stdout.trim().split('\n')[0];
+				if (!raw) {
+					resolve(false);
+					return;
+				}
+				const have = raw.split('.').map(Number);
+				resolve(!versionAtLeast(have, MIN_NVIDIA_DRIVER_FOR_DXVK));
+			}
+		);
+	});
+
 const getVramMbFromSysfs = async (): Promise<number | null> => {
 	try {
 		const drmDir = '/sys/class/drm';

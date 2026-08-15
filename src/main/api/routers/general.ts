@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { app, dialog, shell } from 'electron';
 import Logger from 'electron-log/main';
 import { z } from 'zod';
@@ -25,12 +27,13 @@ export const generalRouter = createTRPCRouter({
 		.input(z.string().url())
 		.mutation(({ input }) => shell.openExternal(input)),
 	openInstallFolder: publicProcedure.mutation(() => {
+		// the file manager needs native separators; a stored forward-slash path fails to open.
 		const dir = Preferences.data.clientDir;
-		if (dir) shell.openPath(dir);
+		if (dir) shell.openPath(path.normalize(dir));
 	}),
 	openLogFile: publicProcedure.mutation(() => {
 		const file = Logger.transports.file.getFile().path;
-		shell.openPath(file);
+		shell.openPath(path.normalize(file));
 	}),
 	filePicker: publicProcedure
 		.input(

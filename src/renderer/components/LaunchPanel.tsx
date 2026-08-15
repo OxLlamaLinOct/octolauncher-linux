@@ -210,7 +210,14 @@ const LaunchPanel = () => {
 						<p className="s1 -mb-2 text-blueGray">{status.message}</p>
 					))}
 				{start.data && !start.data.ok && start.data.error && (
-					<p className="s1 -mb-2 text-orange">{start.data.error}</p>
+					<div className="-mb-2 flex flex-col items-start gap-1">
+						<p className="s1 text-orange">{start.data.error}</p>
+						{start.data.code === 'dxvkDriverTooOld' && (
+							<Button onClick={() => start.mutateAsync({ force: true })}>
+								{t('launch.launchAnyway')}
+							</Button>
+						)}
+					</div>
 				)}
 				<div className="tw-loading-wrapper">
 					{status.progress !== undefined && (

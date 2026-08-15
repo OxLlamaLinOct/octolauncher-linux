@@ -7,7 +7,7 @@ in a dedicated, self-managed prefix — no manual Steam shortcut or Wine setup
 required.
 
 **What it does:**
-- Downloads and patches the OctoWoW game client via a manifest-based CDN updater
+- Downloads and keeps the OctoWoW game client in sync over BitTorrent (via `aria2`), and shares pieces back to other players while it does
 - Rewrites `Config.wtf` with the correct realm/patch-list on every launch
 - Optionally applies binary tweaks to `WoW.exe` (FOV, far-clip, large-address flag, etc.)
 - Injects client mods (VanillaFixes, DXVK, nampower, SuperWoW, etc.) via a DLL chainloader
@@ -24,7 +24,7 @@ See **[INSTALL.md](INSTALL.md)** for the full step-by-step guide. Short version:
 2. `chmod +x OctoLauncher.AppImage` and run it.
 3. Set your WoW client directory when prompted, click **Verify**, then **Play**.
 
-Requires Steam with at least one Proton version installed — see INSTALL.md for details.
+Requires `aria2` and Steam with at least one Proton version installed — see INSTALL.md for details.
 
 ---
 

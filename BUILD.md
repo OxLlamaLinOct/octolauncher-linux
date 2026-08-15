@@ -32,7 +32,21 @@ sudo apt install build-essential cmake python3
 `node-gyp` in general; `cmake` is specifically needed for `stormlib-node`'s
 Linux build step.
 
-### 3. Steam + Proton
+### 3. aria2
+
+The game client is distributed over BitTorrent (via [aria2](https://aria2.github.io/))
+rather than a plain file download, so the launcher shells out to a system `aria2c`
+at runtime — same posture as the Steam/Proton prerequisite below, nothing is
+bundled. Install it from your distro's package manager:
+
+```bash
+sudo apt install aria2
+```
+
+While it's downloading, the launcher also briefly seeds pieces back to other
+players (like the official client does), which needs the local `aria2c` too.
+
+### 4. Steam + Proton
 
 The launcher needs at least one Proton install to find at runtime. The
 simplest way to get one is to install Steam normally
@@ -90,9 +104,8 @@ npm run dist
 
 Runs `tsc && npm run build && npm run pack`. Output lands in `distprod/` as an
 AppImage (`OctoLauncher.AppImage`), configured in
-[electron-builder.yml](electron-builder.yml). `electron-updater` uses the same
-generic publish feed as before (`latest-linux.yml`, generated automatically
-alongside the AppImage).
+[electron-builder.yml](electron-builder.yml). The launcher checks for its own
+updates against this repo's GitHub Releases, not an electron-updater feed.
 
 ## Troubleshooting
 
@@ -101,4 +114,5 @@ alongside the AppImage).
 | `stormlib-node` fails to build (`cmake: command not found`) | `cmake` not installed | `sudo apt install cmake` |
 | `node-gyp` fails to find a compiler | Missing build tools | `sudo apt install build-essential python3` |
 | Play button fails with "No Proton installation found" | No Proton installed via Steam | Install Steam and a Proton version from Compatibility Tools, or set a custom path in the launcher's Compatibility settings |
+| Client sync stays on "Connecting..." / never downloads | `aria2c` not installed or not on `PATH` | `sudo apt install aria2`, then click Verify again |
 | `Port 5173 is in use` | Prior dev server didn't exit cleanly | Ignore (vite falls back to 5174) or kill the stale process |
