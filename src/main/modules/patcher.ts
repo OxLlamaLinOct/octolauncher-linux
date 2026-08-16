@@ -1,4 +1,5 @@
 import path from 'path';
+import os from 'os';
 
 import { screen } from 'electron';
 import fs from 'fs-extra';
@@ -480,7 +481,11 @@ export const patchConfig = async (forceTweaks = false) => {
 		patchList: configWtf.patchList ?? Servers[server].patchList,
 		realmName: configWtf.realmName ?? Servers[server].realmName,
 		hwDetect: 0,
-		BackgroundSound: config.soundInBackground ? 1 : 0
+		BackgroundSound: config.soundInBackground ? 1 : 0,
+		// the 32-bit 1.12 client's thread/affinity handling predates >32-core
+		// CPUs and reliably crashes (Error #132) on workstation/server chips
+		// with higher logical-core counts; cap it to a mask it can represent.
+		...(os.cpus().length > 32 ? { processAffinityMask: 0xffffffff } : {})
 	};
 
 	const repaired = await repairResolution(

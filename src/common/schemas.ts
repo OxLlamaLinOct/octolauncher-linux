@@ -43,7 +43,7 @@ export const HardwareInfoSchema = z.object({
 	cpuModel: z.string(),
 	gpuModel: z.string(),
 	vramMb: z.number().nullable(),
-	vramSource: z.enum(['nvidia-smi', 'sysfs', 'none']),
+	vramSource: z.enum(['nvidia-smi', 'sysfs', 'glxinfo', 'none']),
 	detectedAt: z.string(),
 	schemaVersion: z.number()
 });

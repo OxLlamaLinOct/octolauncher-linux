@@ -86,6 +86,23 @@ const getVramMbFromSysfs = async (): Promise<number | null> => {
 	}
 };
 
+// sysfs's mem_info_vram_total is an amdgpu-specific attribute; drivers like
+// Intel's i915/xe don't expose it, so fall back to Mesa's own renderer query
+// (GLX_MESA_query_renderer), which reports video memory for any Mesa driver
+// (Intel, AMD, nouveau) generically.
+const getVramMbFromGlxinfo = (): Promise<number | null> =>
+	new Promise(resolve => {
+		execFile('glxinfo', ['-B'], (error, stdout) => {
+			if (error) {
+				resolve(null);
+				return;
+			}
+			const match = stdout.match(/Video memory:\s*(\d+)\s*MB/i);
+			const mb = match ? Number(match[1]) : NaN;
+			resolve(Number.isFinite(mb) && mb > 0 ? Math.round(mb) : null);
+		});
+	});
+
 const getVramMb = async (): Promise<{
 	mb: number | null;
 	source: HardwareInfo['vramSource'];
@@ -95,6 +112,9 @@ const getVramMb = async (): Promise<{
 
 	const sysfs = await getVramMbFromSysfs();
 	if (sysfs !== null) return { mb: sysfs, source: 'sysfs' };
+
+	const glxinfo = await getVramMbFromGlxinfo();
+	if (glxinfo !== null) return { mb: glxinfo, source: 'glxinfo' };
 
 	return { mb: null, source: 'none' };
 };
