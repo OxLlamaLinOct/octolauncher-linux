@@ -293,6 +293,7 @@ class ModsClass extends Observable<ModsStatus> {
 		}
 
 		const missing: string[] = [];
+		const enabledMods: string[] = [];
 		let dxvkRepair = false;
 		for (const m of MODS) {
 			// disabled mods: leave dlls.txt and installed state untouched
@@ -304,6 +305,7 @@ class ModsClass extends Observable<ModsStatus> {
 			// torrent mode: DLLs ship in the client; a missing file goes to `missing`, not dirty
 			if (isTorrentMode()) {
 				const enabled = state?.enabled ?? DEFAULT_ENABLED_MODS.includes(m.id);
+				if (enabled) enabledMods.push(m.id);
 				// dxvk loads by file presence and torrent piece spillover can
 				// corrupt it; hash-verify every state: park/restore verified
 				// copies only, delete junk, re-download the pin when needed
@@ -397,6 +399,8 @@ class ModsClass extends Observable<ModsStatus> {
 					: removeDll(clientDir, m.registerInDllsTxt)
 				).catch(() => {});
 
+			if (state?.enabled) enabledMods.push(m.id);
+
 			this.#patchRow(m.id, {
 				installedVersion,
 				latestVersion: m.version,
@@ -404,6 +408,8 @@ class ModsClass extends Observable<ModsStatus> {
 				ignoreUpdates: !!state?.ignoreUpdates
 			});
 		}
+
+		Logger.info(`Mods enabled: ${enabledMods.length ? enabledMods.join(', ') : 'none'}`);
 
 		if (dxvkRepair) {
 			const dm = getMod('dxvk');

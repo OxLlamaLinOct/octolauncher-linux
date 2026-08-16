@@ -183,6 +183,16 @@ export const launcherRouter = createTRPCRouter({
 				}
 
 				child.on('error', e => Logger.error('Game process error', e));
+				// Wine prints unhandled-exception details (crashing module + address)
+				// to stderr by default; capture it so a crash report actually shows
+				// what faulted instead of just "WoW stopped".
+				let stderrBuf = '';
+				child.stderr?.on('data', (d: Buffer) => {
+					stderrBuf += d.toString();
+					const lines = stderrBuf.split('\n');
+					stderrBuf = lines.pop() ?? '';
+					lines.forEach(l => l.trim() && Logger.warn(`[wine] ${l.trim()}`));
+				});
 
 				if (!minimizeToTrayOnPlay) {
 					mainWindow?.close();
