@@ -357,6 +357,21 @@ const LAUNCHER_OWNED_FILES = new Set(['d3d9.dll']);
 const isLauncherOwned = (parts: string[]) =>
 	parts.length === 1 && LAUNCHER_OWNED_FILES.has(parts[0].toLowerCase());
 
+// the intro/logo cinematics are purely cosmetic and playing them pulls in
+// Wine's COM/DirectShow + DivX codec stack, which we've seen crash the whole
+// client on launch on at least one system; skip them entirely on Linux
+// rather than risk it - a missing cinematic file is a silent, harmless skip
+// for the client, not an error.
+const SKIPPED_LINUX_FILES = new Set([
+	'data/interface/cinematics/logo_800.avi',
+	'data/interface/cinematics/logo_1024.avi',
+	'data/interface/cinematics/wow_intro_800.avi',
+	'data/interface/cinematics/wow_intro_1024.avi'
+]);
+const isSkippedOnLinux = (parts: string[]) =>
+	os.platform() !== 'win32' &&
+	SKIPPED_LINUX_FILES.has(parts.join('/').toLowerCase());
+
 export const torrentDownloadSelection = async (
 	clientDir: string,
 	url: string,
@@ -376,7 +391,7 @@ export const torrentDownloadSelection = async (
 		for (let i = 0; i < files.length; i++) {
 			const f = files[i];
 			if (!f.path?.length || typeof f.length !== 'number') return null;
-			if (isLauncherOwned(f.path)) continue;
+			if (isLauncherOwned(f.path) || isSkippedOnLinux(f.path)) continue;
 			const dest = path.join(clientDir, ...f.path);
 			const st = await fs.stat(dest).catch(() => null);
 			if (!st) {
@@ -416,7 +431,7 @@ export const torrentTreeIntact = async (
 		if (!files.length) return false;
 		for (const f of files) {
 			if (!f.path?.length || typeof f.length !== 'number') return false;
-			if (isLauncherOwned(f.path)) continue;
+			if (isLauncherOwned(f.path) || isSkippedOnLinux(f.path)) continue;
 			const st = await fs
 				.stat(path.join(clientDir, ...f.path))
 				.catch(() => null);

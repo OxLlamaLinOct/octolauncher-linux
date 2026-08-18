@@ -8,7 +8,8 @@ import {
 	ScrollText,
 	ShieldCheck,
 	Gamepad2,
-	RotateCcw
+	RotateCcw,
+	Clipboard
 } from 'lucide-react';
 
 import { PreferencesSchema } from '~common/schemas';
@@ -133,6 +134,21 @@ const PreferencesDialog = ({ close }: Props) => {
 	const openInstallFolder = api.general.openInstallFolder.useMutation();
 	const openLogFile = api.general.openLogFile.useMutation();
 
+	const utils = api.useContext();
+	const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
+	const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
+	const copyDiagnostics = async () => {
+		setCopyingDiagnostics(true);
+		try {
+			const text = await utils.general.diagnostics.fetch();
+			await navigator.clipboard.writeText(text);
+			setCopiedDiagnostics(true);
+			setTimeout(() => setCopiedDiagnostics(false), 2500);
+		} finally {
+			setCopyingDiagnostics(false);
+		}
+	};
+
 	const { handleSubmit, watch, setValue, reset } = useForm({
 		defaultValues: pref ?? {},
 		resolver: zodResolver(PreferencesSchema)
@@ -244,6 +260,16 @@ const PreferencesDialog = ({ close }: Props) => {
 						className="!items-start text-left text-pink"
 					>
 						{t('prefs.openLogFile')}
+					</TextButton>
+					<TextButton
+						icon={Clipboard}
+						loading={copyingDiagnostics}
+						onClick={copyDiagnostics}
+						className="!items-start text-left text-blueGray"
+					>
+						{copiedDiagnostics
+							? t('prefs.diagnosticsCopied')
+							: t('prefs.copyDiagnostics')}
 					</TextButton>
 				</div>
 

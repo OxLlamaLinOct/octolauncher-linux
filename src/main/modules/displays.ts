@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 
 import { screen } from 'electron';
 import Logger from 'electron-log/main';
@@ -107,11 +107,77 @@ const parseRow = (line: string): DisplayDevice | undefined => {
 	};
 };
 
-// Windows-only (user32.dll enumeration via PowerShell); resolves null
-// elsewhere and every caller already treats that as "skip this refinement."
-export const enumerateDisplays = (): Promise<DisplayDevice[] | null> => {
-	if (os.platform() !== 'win32') return Promise.resolve(null);
+// Caller (VanillaMultiMonitorFix's preferred-monitor sync) indexes displays
+// by the same ordinal Windows' EnumDisplayDevices would assign, since that's
+// what the DLL itself reads back under Wine. Wine's X11 driver builds its
+// display list directly from XRandR output order, so xrandr's own listing
+// order is the same ordinal in practice - this isn't independently verified
+// against Wine's enumeration, just the best available match without a
+// Windows API to call directly.
+const parseXrandr = (output: string): DisplayDevice[] => {
+	const devices: DisplayDevice[] = [];
+	let current: DisplayDevice | undefined;
+	let modes: Set<string> | undefined;
 
+	const flush = () => {
+		if (!current || !modes) return;
+		current.modes = [...modes];
+		devices.push(current);
+	};
+
+	for (const line of output.split(/\r?\n/)) {
+		const head = /^(\S+) (connected|disconnected)( primary)?(?: (\d+)x(\d+)\+\d+\+\d+)?/.exec(
+			line
+		);
+		if (head) {
+			flush();
+			const [, name, state, primaryFlag, w, h] = head;
+			modes = new Set();
+			current = {
+				index: devices.length,
+				deviceName: name,
+				deviceString: name,
+				attached: state === 'connected',
+				primary: !!primaryFlag,
+				width: w ? Number(w) : 0,
+				height: h ? Number(h) : 0,
+				refresh: 0,
+				modes: []
+			};
+			continue;
+		}
+		const mode = /^\s+(\d+)x(\d+)\s+([\d.]+)(\*)?/.exec(line);
+		if (mode && current && modes) {
+			const [, w, h, hz, isCurrent] = mode;
+			modes.add(`${w}x${h}`);
+			if (isCurrent) current.refresh = Math.round(Number(hz));
+		}
+	}
+	flush();
+
+	return devices;
+};
+
+const enumerateDisplaysLinux = (): Promise<DisplayDevice[] | null> =>
+	new Promise(resolve => {
+		execFile('xrandr', ['--query'], (error, stdout) => {
+			if (error) {
+				Logger.warn('xrandr enumeration failed', error);
+				resolve(null);
+				return;
+			}
+			const devices = parseXrandr(stdout);
+			if (!devices.length) {
+				Logger.warn('xrandr returned no display devices');
+				resolve(null);
+				return;
+			}
+			Logger.info(`Enumerated ${devices.length} display device(s) via xrandr`);
+			resolve(devices);
+		});
+	});
+
+const enumerateDisplaysWindows = (): Promise<DisplayDevice[] | null> => {
 	const encoded = Buffer.from(SCRIPT, 'utf16le').toString('base64');
 
 	return new Promise(resolve => {
@@ -155,4 +221,10 @@ export const enumerateDisplays = (): Promise<DisplayDevice[] | null> => {
 			}
 		});
 	});
+};
+
+export const enumerateDisplays = (): Promise<DisplayDevice[] | null> => {
+	if (os.platform() === 'win32') return enumerateDisplaysWindows();
+	if (os.platform() === 'linux') return enumerateDisplaysLinux();
+	return Promise.resolve(null);
 };

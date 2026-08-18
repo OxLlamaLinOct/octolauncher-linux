@@ -193,6 +193,25 @@ export type LaunchInvocation = {
 	env: Record<string, string>;
 };
 
+// the 32-bit 1.12 client has a genuine, ~20-year-old unsynchronized
+// lazy-init race on one of its own critical sections (confirmed by direct
+// disassembly of the shipped WoW.exe against the exact ntdll.dll a report
+// used - WoW.exe never writes the corrupt value itself, but nothing guards
+// the read either). It practically never loses that race on real Windows or
+// on typical desktop core counts, but a workstation/server CPU with many
+// logical cores changes the scheduling odds enough to hit it reliably
+// (confirmed: pinning to one core and faking a 1-core CPU topology together
+// reproducibly avoided the crash on affected hardware). The 1.12 client
+// itself never scales past a couple of small helper threads, so this costs
+// nothing real - matches the same >32-core threshold used for
+// processAffinityMask in patcher.ts.
+const NEEDS_CORE_CAP_ABOVE = 32;
+const TASKSET_CANDIDATES = ['/usr/bin/taskset', '/bin/taskset'];
+const findTaskset = async (): Promise<string | undefined> => {
+	for (const p of TASKSET_CANDIDATES) if (await fs.pathExists(p)) return p;
+	return undefined;
+};
+
 export const getLaunchInvocation = async (
 	exePath: string,
 	extraArgs: string[] = [],
@@ -212,17 +231,29 @@ export const getLaunchInvocation = async (
 		`Launching via ${selected.name} (${selected.protonPath}), prefix: ${prefixDir}`
 	);
 
+	const protonArgs = [
+		path.join(selected.protonPath, 'proton'),
+		allowMultipleInstances ? 'run' : 'waitforexitandrun',
+		exePath,
+		...extraArgs
+	];
+
+	const manyCores = os.cpus().length > NEEDS_CORE_CAP_ABOVE;
+	const tasksetPath = manyCores ? await findTaskset() : undefined;
+	if (manyCores)
+		Logger.info(
+			tasksetPath
+				? `${os.cpus().length} logical cores detected; pinning WoW.exe to one core via ${tasksetPath}`
+				: 'taskset not found; cannot pin WoW.exe to one core on this many-core system'
+		);
+
 	return {
-		command: 'python3',
-		args: [
-			path.join(selected.protonPath, 'proton'),
-			allowMultipleInstances ? 'run' : 'waitforexitandrun',
-			exePath,
-			...extraArgs
-		],
+		command: tasksetPath ?? 'python3',
+		args: tasksetPath ? ['-c', '0', 'python3', ...protonArgs] : protonArgs,
 		env: {
 			STEAM_COMPAT_DATA_PATH: prefixDir,
-			STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot
+			STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot,
+			...(tasksetPath ? { WINE_CPU_TOPOLOGY: '1:1' } : {})
 		}
 	};
 };

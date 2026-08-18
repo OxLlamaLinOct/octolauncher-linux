@@ -166,6 +166,8 @@ const enUS: Dict = {
 	'prefs.troubleshooting': 'TROUBLESHOOTING:',
 	'prefs.verifyGameFiles': 'Verify game files',
 	'prefs.openLogFile': 'Open log file',
+	'prefs.copyDiagnostics': 'Copy diagnostics',
+	'prefs.diagnosticsCopied': 'Copied!',
 	'prefs.generalSettings': 'GENERAL SETTINGS:',
 	'prefs.cleanWdb': 'Clean WDB on each launch',
 	'prefs.minimizeToTray': 'Minimize to tray while playing',
