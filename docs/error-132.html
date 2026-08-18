@@ -642,7 +642,13 @@
         <div class="log-what"><strong>Real single-core restriction</strong><span><code>taskset -c 0</code> + <code>WINE_CPU_TOPOLOGY=1:1</code> together, from process start</span></div>
         <span class="tag tag-fix">This fixed it</span>
       </div>
+      <div class="log-row">
+        <span class="log-idx">13</span>
+        <div class="log-what"><strong>Looser caps: 2 cores, 4 cores</strong><span>Tested directly via the launcher's core-count override once it shipped &mdash; both still crashed</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
     </div>
+    <p style="margin-top: 16px; font-size: 14.5px; color: var(--text-muted);">That last result matters: it's not that <em>fewer</em> cores helps, it's that <em>one</em> core does. With real two-core parallelism, two threads can genuinely execute at the same instant and hit the race window; pinned to a single core, the OS has to time-slice between them instead, which was enough on its own to stop it from losing.</p>
   </section>
 
   <section>
@@ -693,7 +699,7 @@ test eax, eax</pre>
 
   <section>
     <h2><span class="num">04</span>The fix</h2>
-    <p class="section-dek">Two things need to be true at once: the app has to believe it's on one core, and the OS actually has to schedule it on only one. Neither alone was enough in testing &mdash; topology-faking to 4 cores on its own still crashed.</p>
+    <p class="section-dek">Two things need to be true at once: the app has to believe it's on one core, and the OS actually has to schedule it on only one. Topology-faking alone wasn't enough, and neither was a real cap of 2 or 4 cores &mdash; on tested affected hardware, exactly one core is the threshold, not "a small number."</p>
     <div class="fix-grid">
       <div class="fix-card">
         <h3>Any Linux + Wine/Proton setup</h3>
