@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Error 132 Postmortem</title>
+<meta name="description" content="A field-notes writeup on why vanilla WoW's Error 132 hits many-core Linux systems, and how to fix it.">
+<style>
+  :root {
+    --bg: #edf0ee;
+    --surface: #ffffff;
+    --surface-sunken: #e2e6e3;
+    --text: #1a2320;
+    --text-muted: #57625d;
+    --text-faint: #7c8781;
+    --rule: #ccd3ce;
+    --rule-strong: #aab3ac;
+    --gold: #93701f;
+    --gold-soft: #dcc98a;
+    --teal: #2b7478;
+    --teal-soft: #bfe0e1;
+    --danger: #a1402f;
+    --danger-soft: #f0d9d2;
+    --code-bg: #171d1a;
+    --code-text: #dfe6e1;
+    --code-border: #2d3733;
+    --shadow: 0 1px 2px rgba(20, 30, 25, 0.06), 0 8px 24px -12px rgba(20, 30, 25, 0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11151a;
+      --surface: #171d23;
+      --surface-sunken: #0d1114;
+      --text: #e7ece7;
+      --text-muted: #a3aca5;
+      --text-faint: #78827c;
+      --rule: #2b333a;
+      --rule-strong: #3c4650;
+      --gold: #dcb45a;
+      --gold-soft: #4a3d20;
+      --teal: #7fd0d3;
+      --teal-soft: #1c3a3b;
+      --danger: #e18069;
+      --danger-soft: #402420;
+      --code-bg: #0a0d0b;
+      --code-text: #d7e0da;
+      --code-border: #232b26;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #11151a;
+    --surface: #171d23;
+    --surface-sunken: #0d1114;
+    --text: #e7ece7;
+    --text-muted: #a3aca5;
+    --text-faint: #78827c;
+    --rule: #2b333a;
+    --rule-strong: #3c4650;
+    --gold: #dcb45a;
+    --gold-soft: #4a3d20;
+    --teal: #7fd0d3;
+    --teal-soft: #1c3a3b;
+    --danger: #e18069;
+    --danger-soft: #402420;
+    --code-bg: #0a0d0b;
+    --code-text: #d7e0da;
+    --code-border: #232b26;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "URW Palladio", Georgia, serif;
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sans {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 24px 120px;
+  }
+
+  /* ---------- Masthead ---------- */
+
+  .masthead {
+    padding: 72px 0 40px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .kicker {
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--teal);
+    font-weight: 600;
+    margin: 0 0 18px;
+  }
+
+  h1 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-weight: 600;
+    font-size: clamp(2.1rem, 5vw, 3rem);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+
+  .dek {
+    font-size: 1.18rem;
+    color: var(--text-muted);
+    margin: 0 0 28px;
+    max-width: 34em;
+    text-wrap: balance;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    font-size: 13.5px;
+  }
+
+  .meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .meta-item .label {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    font-size: 11px;
+  }
+
+  .meta-item .value {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 8px;
+    border-radius: 100px;
+    background: var(--teal-soft);
+    color: var(--teal);
+    font-size: 12.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    width: fit-content;
+  }
+
+  .status-pill::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--teal);
+  }
+
+  /* ---------- Sections ---------- */
+
+  section { margin-top: 56px; }
+
+  h2 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0 0 6px;
+    text-wrap: balance;
+    letter-spacing: -0.005em;
+  }
+
+  h2 .num {
+    color: var(--gold);
+    font-variant-numeric: tabular-nums;
+    margin-right: 10px;
+    font-size: 0.85em;
+  }
+
+  .section-dek {
+    color: var(--text-muted);
+    font-size: 15px;
+    margin: 0 0 24px;
+    max-width: 40em;
+  }
+
+  p { margin: 0 0 16px; }
+  p:last-child { margin-bottom: 0; }
+
+  a { color: var(--teal); text-decoration-color: var(--teal-soft); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: var(--teal); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--teal);
+    outline-offset: 2px;
+  }
+
+  code {
+    font-family: ui-monospace, "SF Mono", Consolas, Menlo, monospace;
+    font-size: 0.86em;
+    background: var(--surface-sunken);
+    padding: 0.12em 0.4em;
+    border-radius: 4px;
+    color: var(--text);
+  }
+
+  strong { font-weight: 700; }
+
+  /* ---------- TL;DR box ---------- */
+
+  .tldr {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--gold);
+    border-radius: 6px;
+    padding: 22px 24px;
+    box-shadow: var(--shadow);
+  }
+
+  .tldr .eyebrow {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0 0 10px;
+  }
+
+  .tldr p { font-size: 15.5px; }
+
+  .tldr-cmd {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* ---------- Symptom checklist ---------- */
+
+  .checklist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .checklist li {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    font-size: 15.5px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+  }
+
+  .checklist li::before {
+    content: "✓";
+    color: var(--teal);
+    font-weight: 700;
+    flex-shrink: 0;
+    font-family: -apple-system, sans-serif;
+  }
+
+  /* ---------- Elimination log table ---------- */
+
+  .log-table {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .log-row {
+    display: grid;
+    grid-template-columns: 30px 1fr auto;
+    gap: 14px;
+    align-items: center;
+    padding: 13px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--rule);
+    font-size: 14.5px;
+  }
+
+  .log-row:last-child { border-bottom: none; }
+  .log-row:nth-child(even) { background: var(--surface-sunken); }
+
+  .log-idx {
+    font-family: ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+    font-size: 13px;
+  }
+
+  .log-what strong { display: block; color: var(--text); font-size: 15px; }
+  .log-what span { color: var(--text-muted); font-size: 13.5px; }
+
+  .tag {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 4px 9px;
+    border-radius: 100px;
+    white-space: nowrap;
+  }
+
+  .tag-ruled-out { background: var(--surface-sunken); color: var(--text-faint); border: 1px solid var(--rule-strong); }
+  .tag-confirmed { background: var(--teal-soft); color: var(--teal); }
+  .tag-fix { background: var(--gold-soft); color: var(--gold); }
+
+  /* ---------- Code / disassembly blocks ---------- */
+
+  .code-block {
+    background: var(--code-bg);
+    color: var(--code-text);
+    border: 1px solid var(--code-border);
+    border-radius: 8px;
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+
+  .code-block .chrome {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--code-border);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #7f8a83;
+  }
+
+  .code-block pre {
+    margin: 0;
+    padding: 16px 18px;
+    font-family: ui-monospace, "SF Mono", Consolas, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .code-block .hl { color: var(--gold-soft); background: rgba(220, 180, 90, 0.14); display: inline-block; width: 100%; }
+  :root:not([data-theme="dark"]) .code-block .hl { color: #f0dfae; }
+  .code-block .comment { color: #6f7b74; }
+  .code-block .addr { color: var(--teal-soft); }
+  :root:not([data-theme="dark"]) .code-block .addr { color: #9fd6d9; }
+
+  /* ---------- Race timeline diagram ---------- */
+
+  .race {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .race-lane {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+
+  .race-lane:last-child { border-bottom: none; }
+
+  .race-label {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    padding: 16px 12px;
+    border-right: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+  }
+
+  .race-steps {
+    display: flex;
+    align-items: stretch;
+    padding: 10px 12px;
+    gap: 6px;
+    overflow-x: auto;
+  }
+
+  .race-step {
+    font-family: ui-monospace, monospace;
+    font-size: 12.5px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+  }
+
+  .race-step.danger {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
+    font-weight: 700;
+  }
+
+  .race-step.crash {
+    background: var(--gold-soft);
+    border-color: var(--gold);
+    color: var(--gold);
+    font-weight: 700;
+  }
+
+  .race-arrow {
+    align-self: center;
+    color: var(--text-faint);
+    font-size: 13px;
+  }
+
+  /* ---------- Fix box ---------- */
+
+  .fix-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: 1fr;
+  }
+
+  @media (min-width: 620px) {
+    .fix-grid { grid-template-columns: 1fr 1fr; }
+  }
+
+  .fix-card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .fix-card h3 {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0;
+  }
+
+  .fix-card p { font-size: 14.5px; color: var(--text-muted); margin: 0; }
+
+  /* ---------- Callout / caveat ---------- */
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--teal);
+    border-radius: 6px;
+    padding: 18px 22px;
+  }
+
+  .callout .eyebrow {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--teal);
+    margin: 0 0 10px;
+  }
+
+  .callout p { font-size: 15px; }
+
+  /* ---------- Footer ---------- */
+
+  footer {
+    margin-top: 80px;
+    padding-top: 24px;
+    border-top: 1px solid var(--rule);
+    font-size: 13px;
+    color: var(--text-faint);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  ul.plain { margin: 0 0 16px; padding-left: 22px; }
+  ul.plain li { margin-bottom: 8px; font-size: 15.5px; }
+
+  hr.div {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 48px 0;
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <div class="masthead">
+    <p class="kicker sans">Field notes &middot; Vanilla / Classic WoW on Linux</p>
+    <h1>Error 132 Postmortem</h1>
+    <p class="dek">How a 20-year-old race condition in the 1.12 client only ever loses on many-core CPUs &mdash; and how to fix it in five minutes.</p>
+    <div class="meta-row sans">
+      <div class="meta-item">
+        <span class="label">Symptom</span>
+        <span class="value">ERROR #132 (0x85100084)</span>
+      </div>
+      <div class="meta-item">
+        <span class="label">Client</span>
+        <span class="value">Vanilla 1.12 / TurtleWoW-derived, build 5875</span>
+      </div>
+      <div class="meta-item">
+        <span class="label">Platform</span>
+        <span class="value">Linux &middot; Proton / Wine</span>
+      </div>
+      <div class="meta-item">
+        <span class="label">Status</span>
+        <span class="status-pill">Root cause confirmed, fix verified</span>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="tldr">
+      <p class="eyebrow sans">If you just want the fix</p>
+      <p>Your CPU almost certainly has a lot of logical cores (workstation or server-class, 32+ threads). Pin the game to one core and tell it there's only one core, and it stops crashing:</p>
+      <div class="tldr-cmd">
+        <div class="code-block"><div class="chrome"><span>shell</span></div><pre>taskset -c 0 env WINE_CPU_TOPOLOGY=1:1 wine WoW.exe</pre></div>
+      </div>
+      <p style="margin-top: 14px; font-size: 14px;">Launching through Proton/a launcher wrapper instead of raw <code>wine</code>? Set <code>WINE_CPU_TOPOLOGY=1:1</code> in the environment and prefix the whole launch command with <code>taskset -c 0</code>. On real Windows, the equivalent is Task Manager &rarr; Details &rarr; right-click <code>WoW.exe</code> &rarr; Set Affinity &rarr; one CPU.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">01</span>Is this you?</h2>
+    <p class="section-dek">This specific failure has a distinctive shape. Check the boxes before assuming it's the same bug.</p>
+    <ul class="checklist">
+      <li>The game goes to a black window and dies within a few seconds &mdash; before the login screen ever paints.</li>
+      <li>The crash dialog reads <strong>"ERROR #132 (0x85100084) Fatal Exception," ACCESS_VIOLATION</strong>, referencing a very small memory address (commonly <code>0x00000009</code>).</li>
+      <li>Your CPU has an unusually high logical core count &mdash; think dual-socket Xeon, Threadripper, or any workstation/server board, not a typical 4&ndash;16 core desktop.</li>
+      <li>It happens no matter what you change: mods, DXVK on or off, different Proton/Wine versions, a completely fresh client download.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span>The elimination log</h2>
+    <p class="section-dek">Every variable tested, in order, against one reporter's Xeon Gold 6240R workstation (96 logical threads, genuine discrete GPU, not a VM). Nothing here fixed it &mdash; but each result narrowed the search.</p>
+    <div class="log-table sans">
+      <div class="log-row">
+        <span class="log-idx">01</span>
+        <div class="log-what"><strong>DXVK (Vulkan D3D9 translation)</strong><span>Fully uninstalled, forced to Wine's own wined3d instead</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">02</span>
+        <div class="log-what"><strong>All mods and VanillaFixes</strong><span>Every mod disabled, no DLL chainloader at all</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">03</span>
+        <div class="log-what"><strong>Proton / Wine version</strong><span>Identical crash on Experimental, 9.0 Beta, and 8.0</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">04</span>
+        <div class="log-what"><strong>The launcher itself</strong><span><code>WoW.exe</code> run directly via a bare Steam non-Steam-game shortcut, zero launcher involvement</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">05</span>
+        <div class="log-what"><strong>Corrupted / bad client install</strong><span>Two independent fresh downloads, one via BitTorrent, one direct from the site</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">06</span>
+        <div class="log-what"><strong>Proton prefix corruption</strong><span>Fully reset, rebuilt from scratch, watched Proton bootstrap it clean</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">07</span>
+        <div class="log-what"><strong>GPU / kernel driver</strong><span>Forced pure CPU rendering (<code>LIBGL_ALWAYS_SOFTWARE=1</code>) &mdash; identical crash with no GPU in the loop at all</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">08</span>
+        <div class="log-what"><strong>Audio subsystem</strong><span>Sound forced off entirely (<code>SoundOutputSystem "0"</code>)</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">09</span>
+        <div class="log-what"><strong>Startup cinematics (DivX / COM)</strong><span>Logo and intro movies removed from the install entirely; suspected as a DirectShow/COM crash vector</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">10</span>
+        <div class="log-what"><strong>CPU affinity mask (client-side)</strong><span><code>Config.wtf</code>'s <code>processAffinityMask</code> &mdash; restricts scheduling, but too late and too soft to matter</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">11</span>
+        <div class="log-what"><strong>CPU topology faking alone</strong><span><code>WINE_CPU_TOPOLOGY=4:1</code> on its own &mdash; changes what the app sees, not real scheduling</span></div>
+        <span class="tag tag-ruled-out">Ruled out</span>
+      </div>
+      <div class="log-row">
+        <span class="log-idx">12</span>
+        <div class="log-what"><strong>Real single-core restriction</strong><span><code>taskset -c 0</code> + <code>WINE_CPU_TOPOLOGY=1:1</code> together, from process start</span></div>
+        <span class="tag tag-fix">This fixed it</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span>What's actually happening</h2>
+    <p class="section-dek">The client's own crash reporter (<code>Errors/*.txt</code>, dropped next to <code>WoW.exe</code>) turned out to hold a full register dump and stack trace &mdash; the real breakthrough. Cross-referencing it against the client binary's own import table pinned the exact Win32 call.</p>
+
+    <p>The fault: <code>EXCEPTION_ACCESS_VIOLATION</code> reading address <code>0x9</code>, inside <code>ntdll.dll</code>, at an instruction that turned out to be <code>KERNEL32.dll::LeaveCriticalSection</code>'s real implementation:</p>
+
+    <div class="code-block">
+      <div class="chrome"><span>ntdll.dll &middot; disassembly at fault</span><span class="mono">0x7BF678EA</span></div>
+      <pre><span class="comment">; EBX holds the argument WoW.exe pushed - a corrupt CRITICAL_SECTION*</span>
+mov ebx, [ebp+8]
+<span class="hl">mov eax, [ebx+8]      &lt;- crash: ebx=1, so this reads address 0x9</span>
+dec eax
+mov [ebx+8], eax
+test eax, eax</pre>
+    </div>
+
+    <p>Walking backward from there into <code>WoW.exe</code> itself turned up a real, textbook bug in the client's own 20-year-old code: a hand-rolled lazy-initialized critical section, guarded by a proper spinlock &mdash; except the pointer to it gets <strong>published before initialization finishes</strong>, and a separate code path elsewhere reads that same pointer with no guard at all before calling <code>LeaveCriticalSection</code> on it.</p>
+
+    <div class="race sans">
+      <div class="race-lane">
+        <div class="race-label">Thread A<br><span style="font-weight:400; color: var(--text-faint);">(lazy init)</span></div>
+        <div class="race-steps">
+          <div class="race-step">acquire spinlock</div>
+          <span class="race-arrow">&rarr;</span>
+          <div class="race-step danger">publish pointer</div>
+          <span class="race-arrow">&rarr;</span>
+          <div class="race-step">InitializeCriticalSection()</div>
+          <span class="race-arrow">&rarr;</span>
+          <div class="race-step">release spinlock</div>
+        </div>
+      </div>
+      <div class="race-lane">
+        <div class="race-label">Thread B<br><span style="font-weight:400; color: var(--text-faint);">(unguarded)</span></div>
+        <div class="race-steps">
+          <div class="race-step crash">read pointer, no check</div>
+          <span class="race-arrow">&rarr;</span>
+          <div class="race-step crash">LeaveCriticalSection()</div>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin-top: 20px;">On real Windows, and on typical 4&ndash;16 core Linux desktops, Thread B essentially never gets scheduled inside that window &mdash; the race is real but the odds of losing it are vanishingly small. A CPU with dozens of logical cores changes the scheduling distribution enough that it's hit reliably instead of almost never.</p>
+
+    <p>Vanilla WoW was built years before multi-core CPUs were mainstream, and it shows: the client never scales its real work across more than a couple of small helper threads (a timing-calibration thread, audio, basic network I/O). That's also why the fix below costs nothing &mdash; there's no real parallelism to lose.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span>The fix</h2>
+    <p class="section-dek">Two things need to be true at once: the app has to believe it's on one core, and the OS actually has to schedule it on only one. Neither alone was enough in testing &mdash; topology-faking to 4 cores on its own still crashed.</p>
+    <div class="fix-grid">
+      <div class="fix-card">
+        <h3>Any Linux + Wine/Proton setup</h3>
+        <p>Wrap your normal launch command:</p>
+        <div class="code-block"><pre style="padding:12px 14px; font-size:12.5px;">taskset -c 0 env \
+  WINE_CPU_TOPOLOGY=1:1 \
+  wine WoW.exe</pre></div>
+      </div>
+      <div class="fix-card">
+        <h3>Real Windows, many-core hardware</h3>
+        <p>Task Manager &rarr; Details tab &rarr; right-click <code>WoW.exe</code> &rarr; <strong>Set affinity</strong> &rarr; uncheck all but one CPU. Do this every launch, or script it.</p>
+      </div>
+    </div>
+    <p style="margin-top: 20px;">If you're on OctoLauncher specifically: current builds detect systems above 32 logical cores automatically and apply this for you &mdash; nothing to configure.</p>
+  </section>
+
+  <section>
+    <div class="callout">
+      <p class="eyebrow sans">Honest caveat</p>
+      <p>One detail never fully closed: the corrupt pointer's observed value was the literal integer <code>1</code>, but an exhaustive scan of every reference to that global across the entire client binary found no code that ever writes <code>1</code> there &mdash; only the correct address. The race window (pointer published before init) is real and directly demonstrated in the disassembly; exactly how it manifests as <code>1</code> specifically, rather than a mid-init address, wasn't pinned down. It didn't need to be &mdash; the fix was verified empirically, independent of that last detail.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span>Who else this applies to</h2>
+    <p>Nothing about the root cause is specific to OctoWoW, or even to this one server. It's a bug in the base 1.12 client binary itself. If you're on a many-core machine and hitting <strong>ERROR #132</strong> on <em>any</em> vanilla/classic private server &mdash; Turtle WoW, or anything else built on the same client &mdash; the same fix almost certainly applies.</p>
+    <p>More generally: this is a useful pattern to recognize in <em>any</em> old 32-bit Windows software under Wine that crashes only on unusually many-core hardware. Hand-rolled thread-safety code from the single-and-dual-core era is common in software this age, and Wine's scheduling characteristics differing from real Windows is enough on its own to expose races that native Windows almost never triggers.</p>
+  </section>
+
+  <footer class="sans">
+    <span>Investigated on a live bug report &middot; confirmed via disassembly of the shipped client and the exact Wine build involved</span>
+    <span>Error 132 Postmortem</span>
+  </footer>
+
+</main>
+</body>
+</html>
