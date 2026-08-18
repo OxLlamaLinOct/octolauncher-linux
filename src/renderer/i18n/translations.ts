@@ -167,6 +167,8 @@ const enUS: Dict = {
 	'prefs.verifyGameFiles': 'Verify game files',
 	'prefs.openLogFile': 'Open log file',
 	'prefs.copyDiagnostics': 'Copy diagnostics',
+	'prefs.coreCountOverride': 'CPU cores to use',
+	'prefs.coreCountAuto': 'Auto',
 	'prefs.diagnosticsCopied': 'Copied!',
 	'prefs.generalSettings': 'GENERAL SETTINGS:',
 	'prefs.cleanWdb': 'Clean WDB on each launch',

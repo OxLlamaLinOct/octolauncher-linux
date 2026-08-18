@@ -212,6 +212,16 @@ const findTaskset = async (): Promise<string | undefined> => {
 	return undefined;
 };
 
+// Preferences.coreCountOverride lets a user test/tune this beyond the
+// shipped default (auto: cap to 1 core above 32 detected). Set, it applies
+// regardless of detected core count; unset/null follows the auto rule.
+const coresToCap = (): number | undefined => {
+	const override = Preferences.data.coreCountOverride;
+	if (override != null) return override;
+	return os.cpus().length > NEEDS_CORE_CAP_ABOVE ? 1 : undefined;
+};
+const coreRange = (n: number) => (n <= 1 ? '0' : `0-${n - 1}`);
+
 export const getLaunchInvocation = async (
 	exePath: string,
 	extraArgs: string[] = [],
@@ -238,22 +248,29 @@ export const getLaunchInvocation = async (
 		...extraArgs
 	];
 
-	const manyCores = os.cpus().length > NEEDS_CORE_CAP_ABOVE;
-	const tasksetPath = manyCores ? await findTaskset() : undefined;
-	if (manyCores)
+	const cap = coresToCap();
+	const tasksetPath = cap ? await findTaskset() : undefined;
+	if (cap)
 		Logger.info(
 			tasksetPath
-				? `${os.cpus().length} logical cores detected; pinning WoW.exe to one core via ${tasksetPath}`
-				: 'taskset not found; cannot pin WoW.exe to one core on this many-core system'
+				? `Pinning WoW.exe to ${cap} core(s) via ${tasksetPath} (${
+						Preferences.data.coreCountOverride != null
+							? 'manual override'
+							: `${os.cpus().length} logical cores detected`
+				  })`
+				: `taskset not found; cannot cap WoW.exe to ${cap} core(s)`
 		);
 
 	return {
 		command: tasksetPath ?? 'python3',
-		args: tasksetPath ? ['-c', '0', 'python3', ...protonArgs] : protonArgs,
+		args:
+			tasksetPath && cap
+				? ['-c', coreRange(cap), 'python3', ...protonArgs]
+				: protonArgs,
 		env: {
 			STEAM_COMPAT_DATA_PATH: prefixDir,
 			STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot,
-			...(tasksetPath ? { WINE_CPU_TOPOLOGY: '1:1' } : {})
+			...(tasksetPath && cap ? { WINE_CPU_TOPOLOGY: `${cap}:1` } : {})
 		}
 	};
 };

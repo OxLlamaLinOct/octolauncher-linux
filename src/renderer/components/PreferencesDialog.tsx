@@ -20,6 +20,7 @@ import { useT } from '~renderer/i18n';
 
 import TextButton from './styled/TextButton';
 import CheckboxInput from './form/CheckboxInput';
+import TextInput from './form/TextInput';
 import DialogButton from './styled/DialogButton';
 import ClientDirDialog from './ClientDirDialog';
 import CloseButton from './styled/CloseButton';
@@ -149,7 +150,7 @@ const PreferencesDialog = ({ close }: Props) => {
 		}
 	};
 
-	const { handleSubmit, watch, setValue, reset } = useForm({
+	const { handleSubmit, watch, setValue, reset, register } = useForm({
 		defaultValues: pref ?? {},
 		resolver: zodResolver(PreferencesSchema)
 	});
@@ -173,7 +174,8 @@ const PreferencesDialog = ({ close }: Props) => {
 					cleanWdb: v.cleanWdb,
 					minimizeToTrayOnPlay: v.minimizeToTrayOnPlay,
 					allowMultipleInstances: v.allowMultipleInstances,
-					shareDownloads: v.shareDownloads
+					shareDownloads: v.shareDownloads,
+					coreCountOverride: v.coreCountOverride ?? null
 				});
 				close();
 			})}
@@ -271,6 +273,23 @@ const PreferencesDialog = ({ close }: Props) => {
 							? t('prefs.diagnosticsCopied')
 							: t('prefs.copyDiagnostics')}
 					</TextButton>
+					<div className="mt-1 flex flex-col gap-1">
+						<label className="s1 text-blueGray" htmlFor="coreCountOverride">
+							{t('prefs.coreCountOverride')}
+						</label>
+						<TextInput
+							id="coreCountOverride"
+							type="number"
+							min={1}
+							max={1024}
+							placeholder={t('prefs.coreCountAuto')}
+							className="w-20"
+							{...register('coreCountOverride', {
+								setValueAs: v =>
+									v === '' || v === null || v === undefined ? null : Number(v)
+							})}
+						/>
+					</div>
 				</div>
 
 				<div className="flex min-w-0 flex-col">
