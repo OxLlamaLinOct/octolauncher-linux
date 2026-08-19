@@ -197,30 +197,16 @@ export type LaunchInvocation = {
 // lazy-init race on one of its own critical sections (confirmed by direct
 // disassembly of the shipped WoW.exe against the exact ntdll.dll a report
 // used - WoW.exe never writes the corrupt value itself, but nothing guards
-// the read either). It practically never loses that race on real Windows or
-// on typical desktop core counts, but a workstation/server CPU with many
-// logical cores changes the scheduling odds enough to hit it reliably
-// (confirmed: pinning to one core and faking a 1-core CPU topology together
-// reproducibly avoided the crash on affected hardware). The 1.12 client
-// itself never scales past a couple of small helper threads, so this costs
-// nothing real - matches the same >32-core threshold used for
-// processAffinityMask in patcher.ts.
-const NEEDS_CORE_CAP_ABOVE = 32;
+// the read either). Real 2+-core parallelism is enough to lose that race
+// (confirmed on affected hardware even capped to 2 or 4 cores); only pinning
+// to exactly one core, combined with faking a 1-core CPU topology, reliably
+// avoids it. The 1.12 client itself never scales past a couple of small
+// helper threads, so this costs nothing real.
 const TASKSET_CANDIDATES = ['/usr/bin/taskset', '/bin/taskset'];
 const findTaskset = async (): Promise<string | undefined> => {
 	for (const p of TASKSET_CANDIDATES) if (await fs.pathExists(p)) return p;
 	return undefined;
 };
-
-// Preferences.coreCountOverride lets a user test/tune this beyond the
-// shipped default (auto: cap to 1 core above 32 detected). Set, it applies
-// regardless of detected core count; unset/null follows the auto rule.
-const coresToCap = (): number | undefined => {
-	const override = Preferences.data.coreCountOverride;
-	if (override != null) return override;
-	return os.cpus().length > NEEDS_CORE_CAP_ABOVE ? 1 : undefined;
-};
-const coreRange = (n: number) => (n <= 1 ? '0' : `0-${n - 1}`);
 
 export const getLaunchInvocation = async (
 	exePath: string,
@@ -248,29 +234,20 @@ export const getLaunchInvocation = async (
 		...extraArgs
 	];
 
-	const cap = coresToCap();
-	const tasksetPath = cap ? await findTaskset() : undefined;
-	if (cap)
-		Logger.info(
-			tasksetPath
-				? `Pinning WoW.exe to ${cap} core(s) via ${tasksetPath} (${
-						Preferences.data.coreCountOverride != null
-							? 'manual override'
-							: `${os.cpus().length} logical cores detected`
-				  })`
-				: `taskset not found; cannot cap WoW.exe to ${cap} core(s)`
-		);
+	const tasksetPath = await findTaskset();
+	Logger.info(
+		tasksetPath
+			? `Pinning WoW.exe to 1 core via ${tasksetPath}`
+			: 'taskset not found; cannot pin WoW.exe to 1 core'
+	);
 
 	return {
 		command: tasksetPath ?? 'python3',
-		args:
-			tasksetPath && cap
-				? ['-c', coreRange(cap), 'python3', ...protonArgs]
-				: protonArgs,
+		args: tasksetPath ? ['-c', '0', 'python3', ...protonArgs] : protonArgs,
 		env: {
 			STEAM_COMPAT_DATA_PATH: prefixDir,
 			STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot,
-			...(tasksetPath && cap ? { WINE_CPU_TOPOLOGY: `${cap}:1` } : {})
+			...(tasksetPath ? { WINE_CPU_TOPOLOGY: '1:1' } : {})
 		}
 	};
 };

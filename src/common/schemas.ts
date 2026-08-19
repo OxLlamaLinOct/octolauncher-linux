@@ -86,10 +86,7 @@ export const PreferencesSchema = z.object({
 	config: ConfigWtfSchema.default({}),
 	mods: z.record(ModStateSchema).default({}),
 	hardware: HardwareInfoSchema.optional(),
-	farClipUserSet: z.boolean().optional(),
-	// overrides the automatic many-core-CPU affinity workaround (see
-	// proton.ts); null/undefined means "auto" - only kicks in above 32 cores.
-	coreCountOverride: z.number().int().min(1).max(1024).nullable().optional()
+	farClipUserSet: z.boolean().optional()
 });
 export type PreferencesSchema = z.infer<typeof PreferencesSchema>;
 
