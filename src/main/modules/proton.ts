@@ -247,6 +247,13 @@ export const getLaunchInvocation = async (
 		env: {
 			STEAM_COMPAT_DATA_PATH: prefixDir,
 			STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot,
+			// protonfixes' get_game_id() falls back to grabbing a number out of
+			// STEAM_COMPAT_DATA_PATH when SteamAppId/SteamGameId aren't set, and
+			// throws an uncaught IndexError (killing the launch before WoW.exe
+			// even starts) when our prefix path has no digits in it at all.
+			// Setting a harmless placeholder app id short-circuits that lookup.
+			SteamAppId: '0',
+			SteamGameId: '0',
 			...(tasksetPath ? { WINE_CPU_TOPOLOGY: '1:1' } : {})
 		}
 	};
