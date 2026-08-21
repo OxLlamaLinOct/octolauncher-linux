@@ -61,6 +61,7 @@ export const PreferencesSchema = z.object({
 	cleanWdb: f.boolean(true),
 	allowMultipleInstances: f.boolean(false),
 	shareDownloads: f.boolean(true),
+	showCrashDialog: f.boolean(true),
 	locale: z
 		.enum(['enUS', 'deDE', 'zhCN', 'esES', 'ptBR', 'ruRU'])
 		.default('enUS'),

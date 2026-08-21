@@ -173,7 +173,8 @@ const PreferencesDialog = ({ close }: Props) => {
 					cleanWdb: v.cleanWdb,
 					minimizeToTrayOnPlay: v.minimizeToTrayOnPlay,
 					allowMultipleInstances: v.allowMultipleInstances,
-					shareDownloads: v.shareDownloads
+					shareDownloads: v.shareDownloads,
+					showCrashDialog: v.showCrashDialog
 				});
 				close();
 			})}
@@ -294,6 +295,11 @@ const PreferencesDialog = ({ close }: Props) => {
 						value={watch('shareDownloads') !== false}
 						setValue={setBool('shareDownloads')}
 						label={t('prefs.shareDownloads')}
+					/>
+					<CheckboxInput
+						value={watch('showCrashDialog') !== false}
+						setValue={setBool('showCrashDialog')}
+						label={t('prefs.showCrashDialog')}
 					/>
 				</div>
 

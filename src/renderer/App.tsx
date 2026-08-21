@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { api } from './utils/api';
 import PageBackground from './assets/background.png';
+import GameCrashDialog from './components/GameCrashDialog';
 import Header from './components/Header';
 import LaunchPanel from './components/LaunchPanel';
 import SelfUpdateBanner from './components/SelfUpdateBanner';
@@ -24,6 +25,7 @@ const App = () => {
 			style={{ backgroundImage: `url(${PageBackground})` }}
 		>
 			<TopBar />
+			<GameCrashDialog />
 			<SelfUpdateBanner />
 			<Header {...{ activeTab, setActiveTab }} />
 

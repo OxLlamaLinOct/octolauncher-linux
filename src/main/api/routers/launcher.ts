@@ -20,6 +20,7 @@ import { syncVanillaFixesCache } from '~main/modules/dllsTxt';
 import { stopSeeding } from '~main/modules/aria2';
 import { minimizeToTray, restoreFromTray } from '~main/modules/tray';
 import { getLaunchInvocation } from '~main/modules/proton';
+import GameCrash from '~main/modules/gameCrash';
 import { getMod } from '~common/mods';
 
 import { createTRPCRouter, publicProcedure } from '../trpc';
@@ -45,6 +46,70 @@ type StartResult = {
 };
 
 const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+// the client's own crash handler writes a timestamped report here on a
+// trapped fault (access violation, etc) - grabbing the newest one written
+// since launch turns "WoW stopped" into an actual diagnosable crash reason
+// instead of just a process-exit event.
+const CRASH_REPORT_MAX_CHARS = 8000;
+
+const findCrashReport = async (
+	clientDir: string,
+	after: number
+): Promise<{ file: string; content: string } | undefined> => {
+	const errorsDir = path.join(clientDir, 'Errors');
+	let entries: fs.Dirent[];
+	try {
+		entries = await fs.readdir(errorsDir, { withFileTypes: true });
+	} catch {
+		return undefined;
+	}
+
+	let newest: { name: string; mtimeMs: number } | undefined;
+	for (const e of entries) {
+		if (!e.isFile() || !/(error|crash).*\.txt$/i.test(e.name)) continue;
+		const stat = await fs.stat(path.join(errorsDir, e.name)).catch(() => undefined);
+		if (stat && stat.mtimeMs >= after && (!newest || stat.mtimeMs > newest.mtimeMs))
+			newest = { name: e.name, mtimeMs: stat.mtimeMs };
+	}
+	if (!newest) return undefined;
+
+	const raw = await fs
+		.readFile(path.join(errorsDir, newest.name), 'utf8')
+		.catch(() => undefined);
+	if (!raw) return undefined;
+
+	// the memory dump section is a giant hex blob with no diagnostic value here
+	const content = raw
+		.split('Memory Dump')[0]
+		.trim()
+		.slice(0, CRASH_REPORT_MAX_CHARS);
+	return { file: newest.name, content };
+};
+
+// exitInfo is only available when we hold a direct child handle (not the
+// VanillaFixes loader path, which can only poll for the process going away)
+const handleGameStopped = async (
+	clientDir: string,
+	launchedAt: number,
+	exitInfo?: { code: number | null; signal: NodeJS.Signals | null }
+) => {
+	const report = await findCrashReport(clientDir, launchedAt).catch(
+		() => undefined
+	);
+	if (report)
+		Logger.warn(`WoW crash report (Errors/${report.file}):\n${report.content}`);
+
+	const crashed = !!report || (!!exitInfo && exitInfo.code !== 0);
+	if (crashed && Preferences.data.showCrashDialog !== false)
+		GameCrash.notify({
+			code: exitInfo?.code ?? null,
+			signal: exitInfo?.signal ?? null,
+			reportFile: report?.file,
+			reportContent: report?.content,
+			at: Date.now()
+		});
+};
 
 let starting = false;
 
@@ -165,6 +230,7 @@ export const launcherRouter = createTRPCRouter({
 					return { ok: false, error: message };
 				}
 
+				const launchedAt = Date.now();
 				const child = spawn(invocation.command, invocation.args, {
 					env: { ...process.env, ...invocation.env },
 					cwd: clientDir,
@@ -212,13 +278,19 @@ export const launcherRouter = createTRPCRouter({
 							while (await isGameRunning(exePath)) await delay(3000);
 						} finally {
 							Logger.log('WoW stopped');
+							// no exit code available when just polling for the process to
+							// go away, so this can only detect a crash via the report file
+							await handleGameStopped(clientDir, launchedAt);
 							restoreFromTray();
 						}
 					})();
 				} else {
-					child.on('exit', () => {
-						Logger.log('WoW stopped');
-						restoreFromTray();
+					child.on('exit', (code, signal) => {
+						Logger.log(`WoW stopped (code=${code}, signal=${signal})`);
+						void handleGameStopped(clientDir, launchedAt, {
+							code,
+							signal
+						}).finally(restoreFromTray);
 					});
 				}
 				return { ok: true };
@@ -228,5 +300,7 @@ export const launcherRouter = createTRPCRouter({
 			} finally {
 				starting = false;
 			}
-		})
+		}),
+	crash: publicProcedure.subscription(() => GameCrash.observe()),
+	acknowledgeCrash: publicProcedure.mutation(() => GameCrash.acknowledge())
 });

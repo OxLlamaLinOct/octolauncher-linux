@@ -1,8 +1,9 @@
-import { Settings, Minus, X } from 'lucide-react';
+import { Settings, Bug, Minus, X } from 'lucide-react';
 import { useState } from 'react';
 
 import { api } from '~renderer/utils/api';
 import { useT } from '~renderer/i18n';
+import { BUG_REPORT_URL } from '~renderer/utils/links';
 
 import DialogButton from './styled/DialogButton';
 import PreferencesDialog from './PreferencesDialog';
@@ -19,6 +20,7 @@ const TopBar = () => {
 
 	const minimize = api.general.minimize.useMutation();
 	const quit = api.general.quit.useMutation();
+	const openLink = api.general.openLink.useMutation();
 	return (
 		<div
 			style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
@@ -29,6 +31,13 @@ const TopBar = () => {
 				className="flex items-center"
 			>
 				<LanguageDropdown />
+				<TextButton
+					icon={Bug}
+					title={t('topbar.bugReport')}
+					onClick={() => openLink.mutateAsync(BUG_REPORT_URL)}
+					size={16}
+					className="!p-1"
+				/>
 				<DialogButton dialog={close => <PreferencesDialog close={close} />}>
 					{open => (
 						<TextButton

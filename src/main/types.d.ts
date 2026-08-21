@@ -7,6 +7,7 @@ export {
 	type CustomMod
 } from './modules/mods';
 export { type ProtonStatus, type ProtonInstall } from './modules/proton';
+export { type CrashInfo } from './modules/gameCrash';
 export {
 	type NewsItem,
 	type NewsFeed,
