@@ -176,21 +176,31 @@ export const aria2Available = async (): Promise<boolean> => {
 	});
 };
 
+// aria2 names the saved metainfo file after the server's Content-Disposition
+// header (currently "wow-client.torrent"), not after TORRENT_NAME - so resume
+// state has to be found by extension rather than by a hardcoded name.
+const findResumeStateFiles = async (dir: string): Promise<string[]> => {
+	let entries: string[];
+	try {
+		entries = await fs.readdir(dir);
+	} catch {
+		return [];
+	}
+	return entries
+		.filter(name => name.endsWith('.torrent') || name.endsWith('.aria2'))
+		.map(name => path.join(dir, name));
+};
+
 export const downloadIsComplete = async (): Promise<boolean> => {
-	const control = path.join(
-		app.getPath('userData'),
-		'torrent-root',
-		`${TORRENT_NAME}.aria2`
-	);
-	return !(await fs.pathExists(control));
+	const dir = path.join(app.getPath('userData'), 'torrent-root');
+	const files = await findResumeStateFiles(dir);
+	return !files.some(f => f.endsWith('.aria2'));
 };
 
 export const clearTorrentResumeState = async (): Promise<void> => {
 	const dir = path.join(app.getPath('userData'), 'torrent-root');
-	await Promise.all([
-		fs.remove(path.join(dir, `${TORRENT_NAME}.aria2`)),
-		fs.remove(path.join(dir, `${TORRENT_NAME}.torrent`))
-	]);
+	const files = await findResumeStateFiles(dir);
+	await Promise.all(files.map(f => fs.remove(f)));
 };
 
 export const torrentUrl = (): string | undefined =>
