@@ -203,71 +203,69 @@ export type LaunchInvocation = {
 // avoids it. The 1.12 client itself never scales past a couple of small
 // helper threads, so this costs nothing real.
 //
-// The pin is applied to the WoW.exe process itself once it's actually
-// running (see pinGameToOneCore), not to the whole `proton run` invocation -
-// wrapping the whole thing in taskset also throttles Proton's own prefix
-// bootstrap (mono/gecko/vcredist installers on a fresh or version-upgraded
-// prefix) down to one core, which can make a first launch look hung for
-// several minutes for no real benefit.
+// This has to be a hard OS-level pin from WoW.exe's very first instruction -
+// applying it retroactively (e.g. `taskset -p` once the process is detected
+// running) leaves a real window where the process is scheduled across every
+// core before we catch up, which is enough to lose the race anyway. So the
+// whole `proton run` invocation is wrapped in taskset, not just the exe.
+// To avoid that throttling Proton's own prefix bootstrap (mono/gecko/
+// vcredist installers on a fresh or version-upgraded prefix) down to one
+// core - which can make a first launch look hung for minutes - warmPrefix()
+// below forces that bootstrap to happen first, unthrottled, via a harmless
+// wineboot invocation, before the real (pinned) launch ever starts.
 const TASKSET_CANDIDATES = ['/usr/bin/taskset', '/bin/taskset'];
 const findTaskset = async (): Promise<string | undefined> => {
 	for (const p of TASKSET_CANDIDATES) if (await fs.pathExists(p)) return p;
 	return undefined;
 };
 
-// -x matches the process's actual name exactly, not just a substring of its
-// full command line - -f would also match our own Proton wrapper invocation
-// (its argv literally contains ".../WoW.exe" as the target to run), which
-// previously caused us to "pin" that wrapper itself instead of the real
-// game process, throttling the very prefix bootstrap this was meant to spare.
-export const pidsOf = (exeName: string): Promise<string[]> =>
-	new Promise(resolve => {
-		execFile('pgrep', ['-x', '-i', exeName], (error, stdout) => {
-			if (error) {
-				resolve([]);
-				return;
+const protonEnv = (
+	selected: ProtonInstall,
+	prefixDir: string
+): Record<string, string> => ({
+	STEAM_COMPAT_DATA_PATH: prefixDir,
+	STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot,
+	// protonfixes' get_game_id() falls back to grabbing a number out of
+	// STEAM_COMPAT_DATA_PATH when SteamAppId/SteamGameId aren't set, and
+	// throws an uncaught IndexError (killing the launch before WoW.exe even
+	// starts) when our prefix path has no digits in it at all. Setting a
+	// harmless placeholder app id short-circuits that lookup.
+	SteamAppId: '0',
+	SteamGameId: '0'
+});
+
+// Forces prefix creation/upgrade (mono/gecko/vcredist installers) to run to
+// completion, unthrottled, ahead of the real launch - `proton run` performs
+// this bootstrap as a preamble no matter what command it's given, so
+// `wineboot` (always present, effectively a no-op once the prefix is
+// current) is a safe, cheap way to trigger it on its own.
+export const warmPrefix = async (): Promise<void> => {
+	if (Proton.status.state !== 'ready') await Proton.verify();
+	if (Proton.status.state !== 'ready') return;
+
+	const { selected } = Proton.status;
+	const prefixDir = Proton.getPrefixDir();
+	await fs.ensureDir(prefixDir);
+
+	Logger.info('Preparing Proton prefix...');
+	await new Promise<void>(resolve => {
+		execFile(
+			'python3',
+			[path.join(selected.protonPath, 'proton'), 'run', 'wineboot'],
+			{
+				env: { ...process.env, ...protonEnv(selected, prefixDir) },
+				timeout: 15 * 60_000
+			},
+			error => {
+				if (error)
+					Logger.warn(
+						`Prefix warm-up did not finish cleanly (continuing anyway): ${error.message}`
+					);
+				else Logger.info('Proton prefix ready');
+				resolve();
 			}
-			resolve(stdout.trim().split('\n').filter(Boolean));
-		});
+		);
 	});
-
-// Waits for exeName to actually start (a fresh/upgraded prefix can spend
-// several minutes in mono/gecko/vcredist installers first) then pins it to
-// core 0, matching the WINE_CPU_TOPOLOGY: '1:1' we hand Proton up front.
-// excludePids skips PIDs that already matched before this launch, so a
-// leftover process from an earlier attempt isn't mistaken for the new one.
-export const pinGameToOneCore = async (
-	exeName: string,
-	excludePids: ReadonlySet<string> = new Set()
-): Promise<void> => {
-	const tasksetPath = await findTaskset();
-	if (!tasksetPath) {
-		Logger.warn(`taskset not found; cannot pin ${exeName} to 1 core`);
-		return;
-	}
-
-	const deadline = Date.now() + 15 * 60_000;
-	while (Date.now() < deadline) {
-		const pids = (await pidsOf(exeName)).filter(p => !excludePids.has(p));
-		if (pids.length) {
-			for (const pid of pids)
-				execFile(tasksetPath, ['-p', '-c', '0', pid], err => {
-					if (err)
-						Logger.warn(
-							`Failed to pin ${exeName} (PID ${pid}) to 1 core: ${err.message}`
-						);
-					else
-						Logger.info(
-							`Pinned ${exeName} (PID ${pid}) to 1 core via ${tasksetPath}`
-						);
-				});
-			return;
-		}
-		await new Promise(r => setTimeout(r, 1000));
-	}
-	Logger.warn(
-		`${exeName} never appeared within 15 minutes; could not pin it to 1 core`
-	);
 };
 
 export const getLaunchInvocation = async (
@@ -297,20 +295,17 @@ export const getLaunchInvocation = async (
 	];
 
 	const tasksetPath = await findTaskset();
+	Logger.info(
+		tasksetPath
+			? `Pinning WoW.exe to 1 core via ${tasksetPath}`
+			: 'taskset not found; cannot pin WoW.exe to 1 core'
+	);
 
 	return {
-		command: 'python3',
-		args: protonArgs,
+		command: tasksetPath ?? 'python3',
+		args: tasksetPath ? ['-c', '0', 'python3', ...protonArgs] : protonArgs,
 		env: {
-			STEAM_COMPAT_DATA_PATH: prefixDir,
-			STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot,
-			// protonfixes' get_game_id() falls back to grabbing a number out of
-			// STEAM_COMPAT_DATA_PATH when SteamAppId/SteamGameId aren't set, and
-			// throws an uncaught IndexError (killing the launch before WoW.exe
-			// even starts) when our prefix path has no digits in it at all.
-			// Setting a harmless placeholder app id short-circuits that lookup.
-			SteamAppId: '0',
-			SteamGameId: '0',
+			...protonEnv(selected, prefixDir),
 			...(tasksetPath ? { WINE_CPU_TOPOLOGY: '1:1' } : {})
 		}
 	};

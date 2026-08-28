@@ -31,6 +31,15 @@ Logger.errorHandler.startCatching();
 Logger.transports.ipc.level = false;
 Logger.info('Launcher starting...');
 
+// Chromium falls back to unprivileged user-namespace sandboxing when the
+// setuid chrome-sandbox helper isn't root-owned (it can't be - our build
+// machine isn't root) - but on a kernel with unprivileged userns disabled
+// (common hardening setting) there's no fallback and it aborts hard instead
+// of just warning. This is a single-purpose launcher UI, not a browser
+// rendering untrusted content, so disabling the OS sandbox costs nothing
+// real here.
+app.commandLine.appendSwitch('no-sandbox');
+
 app.disableHardwareAcceleration();
 
 export let mainWindow: BrowserWindow | null = null;
