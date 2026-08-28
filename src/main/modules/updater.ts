@@ -84,7 +84,11 @@ const ownedDataArchives = async (): Promise<Set<string>> => {
 export const isGameRunning = (executablePath: string) =>
 	new Promise<boolean>(resolve => {
 		const exeName = path.basename(executablePath);
-		execFile('pgrep', ['-f', '-i', exeName], (error, stdout) => {
+		// -x (exact process name) rather than -f (full command line) - -f also
+		// matches our own Proton wrapper invocation, since its argv contains
+		// the exe path as the target to run, causing false "already running"
+		// positives against our own not-yet-started launch.
+		execFile('pgrep', ['-x', '-i', exeName], (error, stdout) => {
 			if (error && (error as { code?: number }).code !== 1) {
 				Logger.warn(
 					`pgrep probe for "${exeName}" failed; assuming game is not ` +

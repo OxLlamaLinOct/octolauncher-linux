@@ -19,7 +19,11 @@ import { removeLegacyLocalePatches } from '~main/modules/localePatch';
 import { syncVanillaFixesCache } from '~main/modules/dllsTxt';
 import { stopSeeding } from '~main/modules/aria2';
 import { minimizeToTray, restoreFromTray } from '~main/modules/tray';
-import { getLaunchInvocation, pinGameToOneCore } from '~main/modules/proton';
+import {
+	getLaunchInvocation,
+	pinGameToOneCore,
+	pidsOf
+} from '~main/modules/proton';
 import GameCrash from '~main/modules/gameCrash';
 import { getMod } from '~common/mods';
 
@@ -230,6 +234,8 @@ export const launcherRouter = createTRPCRouter({
 					return { ok: false, error: message };
 				}
 
+				const preexistingWowPids = new Set(await pidsOf('WoW.exe'));
+
 				const launchedAt = Date.now();
 				const child = spawn(invocation.command, invocation.args, {
 					env: { ...process.env, ...invocation.env },
@@ -248,7 +254,10 @@ export const launcherRouter = createTRPCRouter({
 					return { ok: false, error: `Failed to launch the game: ${message}` };
 				}
 
-				void pinGameToOneCore(path.basename(exePath));
+				void pinGameToOneCore(
+					path.basename(exePath),
+					preexistingWowPids
+				);
 
 				child.on('error', e => Logger.error('Game process error', e));
 				// Wine prints unhandled-exception details (crashing module + address)

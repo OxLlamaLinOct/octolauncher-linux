@@ -215,9 +215,14 @@ const findTaskset = async (): Promise<string | undefined> => {
 	return undefined;
 };
 
-const pidsOf = (exeName: string): Promise<string[]> =>
+// -x matches the process's actual name exactly, not just a substring of its
+// full command line - -f would also match our own Proton wrapper invocation
+// (its argv literally contains ".../WoW.exe" as the target to run), which
+// previously caused us to "pin" that wrapper itself instead of the real
+// game process, throttling the very prefix bootstrap this was meant to spare.
+export const pidsOf = (exeName: string): Promise<string[]> =>
 	new Promise(resolve => {
-		execFile('pgrep', ['-f', '-i', exeName], (error, stdout) => {
+		execFile('pgrep', ['-x', '-i', exeName], (error, stdout) => {
 			if (error) {
 				resolve([]);
 				return;
@@ -229,7 +234,12 @@ const pidsOf = (exeName: string): Promise<string[]> =>
 // Waits for exeName to actually start (a fresh/upgraded prefix can spend
 // several minutes in mono/gecko/vcredist installers first) then pins it to
 // core 0, matching the WINE_CPU_TOPOLOGY: '1:1' we hand Proton up front.
-export const pinGameToOneCore = async (exeName: string): Promise<void> => {
+// excludePids skips PIDs that already matched before this launch, so a
+// leftover process from an earlier attempt isn't mistaken for the new one.
+export const pinGameToOneCore = async (
+	exeName: string,
+	excludePids: ReadonlySet<string> = new Set()
+): Promise<void> => {
 	const tasksetPath = await findTaskset();
 	if (!tasksetPath) {
 		Logger.warn(`taskset not found; cannot pin ${exeName} to 1 core`);
@@ -238,7 +248,7 @@ export const pinGameToOneCore = async (exeName: string): Promise<void> => {
 
 	const deadline = Date.now() + 15 * 60_000;
 	while (Date.now() < deadline) {
-		const pids = await pidsOf(exeName);
+		const pids = (await pidsOf(exeName)).filter(p => !excludePids.has(p));
 		if (pids.length) {
 			for (const pid of pids)
 				execFile(tasksetPath, ['-p', '-c', '0', pid], err => {
