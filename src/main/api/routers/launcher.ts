@@ -19,7 +19,7 @@ import { removeLegacyLocalePatches } from '~main/modules/localePatch';
 import { syncVanillaFixesCache } from '~main/modules/dllsTxt';
 import { stopSeeding } from '~main/modules/aria2';
 import { minimizeToTray, restoreFromTray } from '~main/modules/tray';
-import { getLaunchInvocation } from '~main/modules/proton';
+import { getLaunchInvocation, pinGameToOneCore } from '~main/modules/proton';
 import GameCrash from '~main/modules/gameCrash';
 import { getMod } from '~common/mods';
 
@@ -247,6 +247,8 @@ export const launcherRouter = createTRPCRouter({
 					const message = e instanceof Error ? e.message : String(e);
 					return { ok: false, error: `Failed to launch the game: ${message}` };
 				}
+
+				void pinGameToOneCore(path.basename(exePath));
 
 				child.on('error', e => Logger.error('Game process error', e));
 				// Wine prints unhandled-exception details (crashing module + address)

@@ -202,10 +202,62 @@ export type LaunchInvocation = {
 // to exactly one core, combined with faking a 1-core CPU topology, reliably
 // avoids it. The 1.12 client itself never scales past a couple of small
 // helper threads, so this costs nothing real.
+//
+// The pin is applied to the WoW.exe process itself once it's actually
+// running (see pinGameToOneCore), not to the whole `proton run` invocation -
+// wrapping the whole thing in taskset also throttles Proton's own prefix
+// bootstrap (mono/gecko/vcredist installers on a fresh or version-upgraded
+// prefix) down to one core, which can make a first launch look hung for
+// several minutes for no real benefit.
 const TASKSET_CANDIDATES = ['/usr/bin/taskset', '/bin/taskset'];
 const findTaskset = async (): Promise<string | undefined> => {
 	for (const p of TASKSET_CANDIDATES) if (await fs.pathExists(p)) return p;
 	return undefined;
+};
+
+const pidsOf = (exeName: string): Promise<string[]> =>
+	new Promise(resolve => {
+		execFile('pgrep', ['-f', '-i', exeName], (error, stdout) => {
+			if (error) {
+				resolve([]);
+				return;
+			}
+			resolve(stdout.trim().split('\n').filter(Boolean));
+		});
+	});
+
+// Waits for exeName to actually start (a fresh/upgraded prefix can spend
+// several minutes in mono/gecko/vcredist installers first) then pins it to
+// core 0, matching the WINE_CPU_TOPOLOGY: '1:1' we hand Proton up front.
+export const pinGameToOneCore = async (exeName: string): Promise<void> => {
+	const tasksetPath = await findTaskset();
+	if (!tasksetPath) {
+		Logger.warn(`taskset not found; cannot pin ${exeName} to 1 core`);
+		return;
+	}
+
+	const deadline = Date.now() + 15 * 60_000;
+	while (Date.now() < deadline) {
+		const pids = await pidsOf(exeName);
+		if (pids.length) {
+			for (const pid of pids)
+				execFile(tasksetPath, ['-p', '-c', '0', pid], err => {
+					if (err)
+						Logger.warn(
+							`Failed to pin ${exeName} (PID ${pid}) to 1 core: ${err.message}`
+						);
+					else
+						Logger.info(
+							`Pinned ${exeName} (PID ${pid}) to 1 core via ${tasksetPath}`
+						);
+				});
+			return;
+		}
+		await new Promise(r => setTimeout(r, 1000));
+	}
+	Logger.warn(
+		`${exeName} never appeared within 15 minutes; could not pin it to 1 core`
+	);
 };
 
 export const getLaunchInvocation = async (
@@ -235,15 +287,10 @@ export const getLaunchInvocation = async (
 	];
 
 	const tasksetPath = await findTaskset();
-	Logger.info(
-		tasksetPath
-			? `Pinning WoW.exe to 1 core via ${tasksetPath}`
-			: 'taskset not found; cannot pin WoW.exe to 1 core'
-	);
 
 	return {
-		command: tasksetPath ?? 'python3',
-		args: tasksetPath ? ['-c', '0', 'python3', ...protonArgs] : protonArgs,
+		command: 'python3',
+		args: protonArgs,
 		env: {
 			STEAM_COMPAT_DATA_PATH: prefixDir,
 			STEAM_COMPAT_CLIENT_INSTALL_PATH: selected.steamRoot,
