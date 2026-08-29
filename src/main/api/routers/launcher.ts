@@ -1,5 +1,5 @@
 import path from 'path';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 
 import fs from 'fs-extra';
 import Logger from 'electron-log/main';
@@ -19,7 +19,11 @@ import { removeLegacyLocalePatches } from '~main/modules/localePatch';
 import { syncVanillaFixesCache } from '~main/modules/dllsTxt';
 import { stopSeeding } from '~main/modules/aria2';
 import { minimizeToTray, restoreFromTray } from '~main/modules/tray';
-import { getLaunchInvocation, warmPrefix } from '~main/modules/proton';
+import {
+	getLaunchInvocation,
+	warmPrefix,
+	warmupGraphics
+} from '~main/modules/proton';
 import GameCrash from '~main/modules/gameCrash';
 import { getMod } from '~common/mods';
 
@@ -109,6 +113,27 @@ const handleGameStopped = async (
 			reportContent: report?.content,
 			at: Date.now()
 		});
+};
+
+// Detects the specific wined3d-nodrv-race crash warmupGraphics() works
+// around (see proton.ts): WoW.exe writes Logs/cpu.log early in startup but
+// dies before ever writing to Logs/gx.log, which it opens right as graphics
+// init begins. Checked instead of matching crash-report text since that
+// text is unconfirmed/could shift between client builds; log timing is a
+// mechanical fact of how far startup got, not a guess at wording.
+const hasEarlyGraphicsCrashSignature = async (
+	clientDir: string,
+	launchedAt: number
+): Promise<boolean> => {
+	const cpuLog = await fs
+		.stat(path.join(clientDir, 'Logs', 'cpu.log'))
+		.catch(() => undefined);
+	if (!cpuLog || cpuLog.mtimeMs < launchedAt) return false;
+
+	const gxLog = await fs
+		.stat(path.join(clientDir, 'Logs', 'gx.log'))
+		.catch(() => undefined);
+	return !gxLog || gxLog.mtimeMs < launchedAt || gxLog.size === 0;
 };
 
 let starting = false;
@@ -217,50 +242,54 @@ export const launcherRouter = createTRPCRouter({
 						: `Launching ${exePath}...`
 				);
 
-				let invocation;
-				try {
-					invocation = useLoader
+				const spawnGame = async (): Promise<{
+					child: ChildProcess;
+					launchedAt: number;
+				}> => {
+					const invocation = useLoader
 						? await getLaunchInvocation(
 								loaderPath,
 								['WoW.exe'],
 								!!allowMultipleInstances
 						  )
 						: await getLaunchInvocation(exePath, [], !!allowMultipleInstances);
-				} catch (e) {
-					Logger.error('Failed to prepare Proton launch', e);
-					const message = e instanceof Error ? e.message : String(e);
-					return { ok: false, error: message };
-				}
 
-				const launchedAt = Date.now();
-				const child = spawn(invocation.command, invocation.args, {
-					env: { ...process.env, ...invocation.env },
-					cwd: clientDir,
-					detached: !minimizeToTrayOnPlay
-				});
+					const launchedAt = Date.now();
+					const child = spawn(invocation.command, invocation.args, {
+						env: { ...process.env, ...invocation.env },
+						cwd: clientDir,
+						detached: !minimizeToTrayOnPlay
+					});
 
-				try {
 					await new Promise<void>((resolve, reject) => {
 						child.once('spawn', resolve);
 						child.once('error', reject);
 					});
+
+					child.on('error', e => Logger.error('Game process error', e));
+					// Wine prints unhandled-exception details (crashing module + address)
+					// to stderr by default; capture it so a crash report actually shows
+					// what faulted instead of just "WoW stopped".
+					let stderrBuf = '';
+					child.stderr?.on('data', (d: Buffer) => {
+						stderrBuf += d.toString();
+						const lines = stderrBuf.split('\n');
+						stderrBuf = lines.pop() ?? '';
+						lines.forEach(l => l.trim() && Logger.warn(`[wine] ${l.trim()}`));
+					});
+
+					return { child, launchedAt };
+				};
+
+				let child: ChildProcess;
+				let launchedAt: number;
+				try {
+					({ child, launchedAt } = await spawnGame());
 				} catch (e) {
 					Logger.error('Failed to launch the game', e);
 					const message = e instanceof Error ? e.message : String(e);
 					return { ok: false, error: `Failed to launch the game: ${message}` };
 				}
-
-				child.on('error', e => Logger.error('Game process error', e));
-				// Wine prints unhandled-exception details (crashing module + address)
-				// to stderr by default; capture it so a crash report actually shows
-				// what faulted instead of just "WoW stopped".
-				let stderrBuf = '';
-				child.stderr?.on('data', (d: Buffer) => {
-					stderrBuf += d.toString();
-					const lines = stderrBuf.split('\n');
-					stderrBuf = lines.pop() ?? '';
-					lines.forEach(l => l.trim() && Logger.warn(`[wine] ${l.trim()}`));
-				});
 
 				if (!minimizeToTrayOnPlay) {
 					mainWindow?.close();
@@ -268,9 +297,22 @@ export const launcherRouter = createTRPCRouter({
 				}
 
 				minimizeToTray();
-				if (useLoader) {
-					void (async () => {
-						try {
+
+				// no exit code from the loader path (VanillaFixes.exe chainloads
+				// WoW.exe, so our child handle isn't the real game process) - can
+				// only tell it stopped by polling, not why
+				const waitForStop = (c: ChildProcess) =>
+					new Promise<
+						{ code: number | null; signal: NodeJS.Signals | null } | undefined
+					>(resolve => {
+						if (!useLoader) {
+							c.on('exit', (code, signal) => {
+								Logger.log(`WoW stopped (code=${code}, signal=${signal})`);
+								resolve({ code, signal });
+							});
+							return;
+						}
+						void (async () => {
 							const started = Date.now();
 							while (
 								Date.now() - started < 30_000 &&
@@ -278,23 +320,39 @@ export const launcherRouter = createTRPCRouter({
 							)
 								await delay(1000);
 							while (await isGameRunning(exePath)) await delay(3000);
-						} finally {
 							Logger.log('WoW stopped');
-							// no exit code available when just polling for the process to
-							// go away, so this can only detect a crash via the report file
-							await handleGameStopped(clientDir, launchedAt);
-							restoreFromTray();
-						}
-					})();
-				} else {
-					child.on('exit', (code, signal) => {
-						Logger.log(`WoW stopped (code=${code}, signal=${signal})`);
-						void handleGameStopped(clientDir, launchedAt, {
-							code,
-							signal
-						}).finally(restoreFromTray);
+							resolve(undefined);
+						})();
 					});
-				}
+
+				void (async () => {
+					try {
+						let exitInfo = await waitForStop(child);
+
+						const looksCrashed =
+							!exitInfo || exitInfo.code !== 0 || !!exitInfo.signal;
+						if (
+							looksCrashed &&
+							(await hasEarlyGraphicsCrashSignature(clientDir, launchedAt))
+						) {
+							Logger.warn(
+								'WoW crashed very early in graphics init (gx.log never ' +
+									'written) - retrying once after warming up the graphics driver...'
+							);
+							try {
+								await warmupGraphics(exePath);
+								({ child, launchedAt } = await spawnGame());
+								exitInfo = await waitForStop(child);
+							} catch (e) {
+								Logger.error('Graphics warm-up retry failed', e);
+							}
+						}
+
+						await handleGameStopped(clientDir, launchedAt, exitInfo);
+					} finally {
+						restoreFromTray();
+					}
+				})();
 				return { ok: true };
 			} catch (e) {
 				Logger.error('Failed to start the game', e);

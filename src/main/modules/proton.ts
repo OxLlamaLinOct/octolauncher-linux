@@ -268,6 +268,56 @@ export const warmPrefix = async (): Promise<void> => {
 	});
 };
 
+// Works around a Wine startup race, confirmed via a winedbg write-watchpoint
+// plus static disassembly of the actual crash site: wined3d spins up its own
+// background thread early on to create a throwaway window + GL context and
+// probe adapter capabilities (used even for the pure-OpenGL path, since
+// opengl32 shares wined3d's adapter plumbing) - independent of the game's
+// own window. That thread can lose to Wine's nodrv_CreateWindow race just
+// like a real window can, and when its GL context creation fails, WoW.exe's
+// own error handler responds by nulling a "current adapter" pointer that
+// later, unrelated-looking code dereferences with no null check while
+// logging two of its fields - crashing with Error #132 (ACCESS_VIOLATION)
+// before Logs/gx.log ever gets a line written to it. More likely to actually
+// lose the race on higher-latency hosts (cloud/VM) than typical bare-metal
+// desktops, which is why it can look "unfixable" there specifically.
+//
+// A short-lived, unpinned throwaway launch of the same executable gives
+// wined3d's probe thread one uncontested shot at that race against this same
+// wineserver/prefix before the real (pinned) launch - it doesn't need to
+// fully boot, or even avoid the crash itself, only to let the X11 driver /
+// window-manager side of the race settle once first. Unproven against a
+// genuinely affected machine as of writing - launcher.ts only calls this as
+// a one-time retry after detecting the specific crash signature above, not
+// unconditionally on every launch.
+const GRAPHICS_WARMUP_TIMEOUT_MS = 10_000;
+
+export const warmupGraphics = async (exePath: string): Promise<void> => {
+	if (Proton.status.state !== 'ready') await Proton.verify();
+	if (Proton.status.state !== 'ready') return;
+
+	const { selected } = Proton.status;
+	const prefixDir = Proton.getPrefixDir();
+
+	Logger.info('Warming up graphics driver...');
+	await new Promise<void>(resolve => {
+		execFile(
+			'python3',
+			[path.join(selected.protonPath, 'proton'), 'run', exePath],
+			{
+				env: { ...process.env, ...protonEnv(selected, prefixDir) },
+				timeout: GRAPHICS_WARMUP_TIMEOUT_MS
+			},
+			() => {
+				// killed by the timeout (expected) or exited/crashed on its own -
+				// either way only the side effect matters, not the result
+				Logger.info('Graphics warm-up done');
+				resolve();
+			}
+		);
+	});
+};
+
 export const getLaunchInvocation = async (
 	exePath: string,
 	extraArgs: string[] = [],
