@@ -27,6 +27,7 @@ type SyncOpts = {
 	checkIntegrity?: boolean;
 	seedTime?: number;
 	selectFiles?: number[];
+	stopTimeoutSeconds?: number;
 	onProgress?: (p: SyncProgress) => void;
 	signal?: AbortSignal;
 };
@@ -123,7 +124,7 @@ export const syncClient = (opts: SyncOpts): Promise<void> =>
 					'--stream-piece-selector=inorder',
 					'--max-tries=0',
 					'--retry-wait=5',
-					'--bt-stop-timeout=120',
+					`--bt-stop-timeout=${opts.stopTimeoutSeconds ?? 120}`,
 					'--auto-save-interval=15',
 					'--summary-interval=1',
 					'--console-log-level=warn',
@@ -214,10 +215,186 @@ export const raidVisualsUrl = (): string | undefined =>
 export const clientPatchUrl = (): string | undefined =>
 	import.meta.env.MAIN_VITE_CLIENT_PATCH_URL || undefined;
 
+const isMagnetUri = (url: string): boolean => url.startsWith('magnet:');
+
+const magnetParam = (magnet: string, key: string): string | undefined => {
+	const query = magnet.split('?')[1] ?? '';
+	for (const pair of query.split('&')) {
+		const eq = pair.indexOf('=');
+		if (eq === -1) continue;
+		if (decodeURIComponent(pair.slice(0, eq)) === key)
+			return decodeURIComponent(pair.slice(eq + 1));
+	}
+	return undefined;
+};
+
+const magnetInfoHash = (magnet: string): string | undefined =>
+	magnetParam(magnet, 'xt')
+		?.match(/^urn:btih:([a-fA-F0-9]{40})$/)?.[1]
+		?.toLowerCase();
+
+// Resolves a magnet URI's metadata (the raw bencoded .torrent bytes) purely
+// via DHT/trackers/peers - no HTTP request to any specific host at all. This
+// is what a normal torrent client does with a magnet link, and it's what
+// keeps version checks and file selection working even when the webseed/
+// download host is unreachable (e.g. mid-DDoS), as long as the swarm itself
+// is healthy.
+const fetchMagnetMetadataViaDht = async (
+	magnet: string,
+	timeoutMs = 60_000
+): Promise<Buffer> => {
+	const infoHash = magnetInfoHash(magnet);
+	if (!infoHash) throw new Error('Magnet URI has no btih info hash');
+
+	const dir = path.join(app.getPath('temp'), 'octo-launcher-magnet-meta');
+	await fs.ensureDir(dir);
+
+	await new Promise<void>((resolve, reject) => {
+		const child = spawn(
+			bin(),
+			[
+				`--dir=${dir}`,
+				'--bt-metadata-only=true',
+				'--bt-save-metadata=true',
+				'--enable-dht=true',
+				'--bt-enable-lpd=true',
+				'--summary-interval=0',
+				'--console-log-level=warn',
+				magnet
+			],
+			{ windowsHide: true }
+		);
+		const timer = setTimeout(() => {
+			child.kill();
+			reject(new Error('Timed out resolving torrent metadata via DHT'));
+		}, timeoutMs);
+		child.on('error', e => {
+			clearTimeout(timer);
+			reject(e);
+		});
+		child.on('close', code => {
+			clearTimeout(timer);
+			if (code === 0) resolve();
+			else reject(new Error(`aria2c metadata fetch exited with code ${code}`));
+		});
+	});
+
+	return fs.readFile(path.join(dir, `${infoHash}.torrent`));
+};
+
+// A single verify-then-update pass calls this from several independent
+// places (fetchTorrentSha, torrentTreeIntact, torrentDownloadSelection,
+// pruneStaleArchives) in quick succession. Without sharing results, each one
+// would redo the same (possibly minute-long, mid-DDoS) HTTP-then-DHT dance
+// on its own - and if their timing overlaps, concurrent DHT resolutions race
+// on the same on-disk metadata file. Cache the outcome briefly and de-dupe
+// any calls that arrive while one is still in flight.
+// long enough to comfortably outlast a full pre-flight pass even when it had
+// to fall back to the ~60s-ceiling DHT resolve, so resolveSyncSource() below
+// still gets to reuse that result instead of redoing it right afterward
+const TORRENT_BYTES_CACHE_MS = 90_000;
+// resolvedUri is whichever concrete source actually worked: the plain HTTP
+// .torrent URL when the webseed host answered, or the raw magnet URI when we
+// had to fall back to the swarm. syncClient()/startSeeding() reuse this so
+// the real data transfer takes the same fast path the pre-flight checks just
+// proved works, instead of aria2c redoing its own from-scratch DHT/tracker
+// metadata negotiation on every single launch even when the host is healthy.
+let torrentBytesCache:
+	| { url: string; bytes: Buffer; resolvedUri: string; at: number }
+	| undefined;
+let torrentBytesInFlight: { url: string; promise: Promise<Buffer> } | undefined;
+
+// Fetches the raw bencoded .torrent bytes for the configured torrent source,
+// which may be a plain HTTPS URL to the .torrent file or a magnet URI. Tries
+// a direct HTTP fetch first (fast, and covers the common case where the
+// webseed/download host is healthy), falling back to resolving the same
+// bytes via the swarm when that fails.
+const fetchTorrentBytes = (url: string): Promise<Buffer> => {
+	if (
+		torrentBytesCache?.url === url &&
+		Date.now() - torrentBytesCache.at < TORRENT_BYTES_CACHE_MS
+	)
+		return Promise.resolve(torrentBytesCache.bytes);
+
+	if (torrentBytesInFlight?.url === url) return torrentBytesInFlight.promise;
+
+	const promise = (async () => {
+		const httpUrl = isMagnetUri(url) ? magnetParam(url, 'xs') : url;
+		if (httpUrl) {
+			try {
+				const r = await fetch(httpUrl, { signal: AbortSignal.timeout(8_000) });
+				if (r.ok)
+					return {
+						bytes: Buffer.from(await r.arrayBuffer()),
+						resolvedUri: httpUrl
+					};
+				Logger.warn(`Direct .torrent fetch returned HTTP ${r.status}`);
+			} catch (e) {
+				Logger.warn(`Direct .torrent fetch failed: ${e}`);
+			}
+		}
+		if (!isMagnetUri(url)) throw new Error(`HTTP fetch failed for ${url}`);
+		Logger.log('Falling back to resolving torrent metadata via DHT/trackers...');
+		return { bytes: await fetchMagnetMetadataViaDht(url), resolvedUri: url };
+	})()
+		.then(({ bytes, resolvedUri }) => {
+			torrentBytesCache = { url, bytes, resolvedUri, at: Date.now() };
+			return bytes;
+		})
+		.finally(() => {
+			if (torrentBytesInFlight?.promise === promise)
+				torrentBytesInFlight = undefined;
+		});
+
+	torrentBytesInFlight = { url, promise };
+	return promise;
+};
+
+export type SyncSource = {
+	uri: string;
+	// true when the webseed host was unreachable and we're relying on the
+	// swarm alone - callers should be more patient about stalls (DHT keeps
+	// discovering new peers well past a normal-case timeout) and can surface
+	// that honestly instead of failing fast like a routine problem would.
+	usedFallback: boolean;
+};
+
+// The URI to actually hand aria2c for the real transfer (data sync or
+// seeding): the plain HTTP .torrent URL when that's what last worked; when
+// the host was down and we had to resolve via DHT instead, the local
+// .torrent file fetchMagnetMetadataViaDht already saved, rather than the
+// bare magnet URI - handing aria2c the magnet again would make it redo the
+// exact same peer/metadata negotiation from scratch, risking the same
+// multi-minute stall (or outright failure) we just paid to avoid, when we
+// already have the complete metadata sitting on disk. Falls back to
+// resolving fresh if there's no recent pre-flight result to reuse.
+export const resolveSyncSource = async (url: string): Promise<SyncSource> => {
+	if (!isMagnetUri(url)) return { uri: url, usedFallback: false };
+	if (
+		torrentBytesCache?.url !== url ||
+		Date.now() - torrentBytesCache.at >= TORRENT_BYTES_CACHE_MS
+	)
+		await fetchTorrentBytes(url).catch(() => undefined);
+	if (torrentBytesCache?.url !== url) return { uri: url, usedFallback: true };
+
+	if (isMagnetUri(torrentBytesCache.resolvedUri)) {
+		const infoHash = magnetInfoHash(url);
+		const savedPath = infoHash
+			? path.join(
+					app.getPath('temp'),
+					'octo-launcher-magnet-meta',
+					`${infoHash}.torrent`
+			  )
+			: undefined;
+		if (savedPath && (await fs.pathExists(savedPath)))
+			return { uri: savedPath, usedFallback: true };
+		return { uri: url, usedFallback: true };
+	}
+	return { uri: torrentBytesCache.resolvedUri, usedFallback: false };
+};
+
 export const fetchTorrentSha = async (url: string): Promise<string> => {
-	const r = await fetch(url);
-	if (!r.ok) throw new Error(`HTTP ${r.status}`);
-	const buf = Buffer.from(await r.arrayBuffer());
+	const buf = await fetchTorrentBytes(url);
 	return crypto.createHash('sha1').update(buf).digest('hex');
 };
 
@@ -326,9 +503,7 @@ export const pruneStaleArchives = async (
 	_owned: Set<string>
 ): Promise<string[]> => {
 	try {
-		const r = await fetch(url);
-		if (!r.ok) return [];
-		const bytes = Buffer.from(await r.arrayBuffer());
+		const bytes = await fetchTorrentBytes(url);
 		const expected = torrentDataArchives(bytes);
 		if (!expected.size) return [];
 		for (const u of [clientPatchUrl(), raidVisualsUrl()])
@@ -361,9 +536,13 @@ export const pruneStaleArchives = async (
 	}
 };
 
-// files the torrent ships but a mod toggle owns; the sync must not re-add
-// them or count their absence as an incomplete tree
-const LAUNCHER_OWNED_FILES = new Set(['d3d9.dll']);
+// files the torrent ships but the launcher itself manages independently of
+// the sync (a mod toggle owns d3d9.dll; healRealmlist() keeps realmlist.wtf
+// correct) - the sync must not re-add them, count their absence as an
+// incomplete tree, or try to fetch them over the swarm just because their
+// launcher-written byte size differs from the torrent's recorded copy (which
+// can stall forever if that exact piece happens to have no seeder right now)
+const LAUNCHER_OWNED_FILES = new Set(['d3d9.dll', 'realmlist.wtf']);
 const isLauncherOwned = (parts: string[]) =>
 	parts.length === 1 && LAUNCHER_OWNED_FILES.has(parts[0].toLowerCase());
 
@@ -388,9 +567,8 @@ export const torrentDownloadSelection = async (
 	dropMismatched = false
 ): Promise<number[] | null> => {
 	try {
-		const r = await fetch(url);
-		if (!r.ok) return null;
-		const [torrent] = bdecode(Buffer.from(await r.arrayBuffer())) as [
+		const buf = await fetchTorrentBytes(url);
+		const [torrent] = bdecode(buf) as [
 			{ info?: { files?: { path?: string[]; length?: number }[] } },
 			number
 		];
@@ -431,9 +609,8 @@ export const torrentTreeIntact = async (
 	url: string
 ): Promise<boolean> => {
 	try {
-		const r = await fetch(url);
-		if (!r.ok) return false;
-		const [torrent] = bdecode(Buffer.from(await r.arrayBuffer())) as [
+		const buf = await fetchTorrentBytes(url);
+		const [torrent] = bdecode(buf) as [
 			{ info?: { files?: { path?: string[]; length?: number }[] } },
 			number
 		];
@@ -511,8 +688,9 @@ export const startSeeding = async (
 	if (seeder || starting) return;
 	starting = true;
 	try {
-		const url = torrentUrl();
-		if (!url) return;
+		const configuredUrl = torrentUrl();
+		if (!configuredUrl) return;
+		const { uri: url } = await resolveSyncSource(configuredUrl);
 		const dir = await ensureJunction(clientDir);
 		if (!wantSeeding || seeder) return;
 		const args = [

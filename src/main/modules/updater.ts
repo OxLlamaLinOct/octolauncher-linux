@@ -12,6 +12,7 @@ import { mainWindow } from '~main/index';
 import { getClientVersion } from '~main/utils';
 import {
 	torrentUrl,
+	resolveSyncSource,
 	fetchTorrentSha,
 	syncClient,
 	refreshPristineWow,
@@ -401,6 +402,16 @@ class UpdaterClass extends Observable<UpdaterStatus> {
 			this.status = { state: 'serverUnreachable' };
 			return;
 		}
+		// set before the first await - the re-entrancy guards in verify()/
+		// update() check this.status, so a slow pre-flight (fetchTorrentSha
+		// et al, which can now take up to a minute when falling back to a
+		// DHT resolve) must not leave a window where a second click starts
+		// its own overlapping syncClient() against the same directory.
+		this.status = {
+			state: 'updating',
+			progress: -1,
+			message: 'Checking for updates...'
+		};
 		try {
 			stopSeeding();
 			const sha = await fetchTorrentSha(url);
@@ -427,22 +438,31 @@ class UpdaterClass extends Observable<UpdaterStatus> {
 				: await torrentDownloadSelection(clientPath, url, staleContext);
 			const selectFiles =
 				selection && selection.length > 0 ? selection : undefined;
+			const source = await resolveSyncSource(url);
 			this.status = {
 				state: 'updating',
 				progress: -1,
 				message: clean
 					? 'Verifying game files...'
 					: isUpdate
-					? 'Connecting...'
+					? source.usedFallback
+						? 'Waiting for peers (download server unreachable)...'
+						: 'Connecting...'
 					: 'Preparing download...'
 			};
 			let downloading = false;
 			await syncClient({
-				torrentUrl: url,
+				torrentUrl: source.uri,
 				clientDir: clientPath,
 				checkIntegrity: !!clean,
 				selectFiles,
 				seedTime: 0,
+				// a piece with no currently-connected seeder is a real (if
+				// rare) possibility once the webseed backstop is down - worth
+				// waiting out since DHT keeps finding new peers well past a
+				// normal-case timeout, rather than failing fast like a
+				// routine problem would
+				stopTimeoutSeconds: source.usedFallback ? 600 : 120,
 				onProgress: p => {
 					if (p.bytesPerSecond > 0) downloading = true;
 					const phase = downloading
@@ -450,7 +470,9 @@ class UpdaterClass extends Observable<UpdaterStatus> {
 						: clean
 						? 'Verifying game files'
 						: isUpdate
-						? 'Connecting'
+						? source.usedFallback
+							? 'Waiting for peers'
+							: 'Connecting'
 						: 'Preparing';
 					const remaining = p.bytesTotal - p.bytesDone;
 					const etaSeconds =
