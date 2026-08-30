@@ -258,8 +258,16 @@ export const launcherRouter = createTRPCRouter({
 					const child = spawn(invocation.command, invocation.args, {
 						env: { ...process.env, ...invocation.env },
 						cwd: clientDir,
-						detached: !minimizeToTrayOnPlay
+						detached: !minimizeToTrayOnPlay,
+						// a detached child must not keep piped stdio back through
+						// us - closing our end of those pipes when we quit (we
+						// close mainWindow right after this in the non-tray case)
+						// can SIGPIPE the child the next time it writes to
+						// stderr/stdout, killing a process meant to outlive us
+						// within milliseconds of our own exit
+						stdio: minimizeToTrayOnPlay ? 'pipe' : 'ignore'
 					});
+					if (!minimizeToTrayOnPlay) child.unref();
 
 					await new Promise<void>((resolve, reject) => {
 						child.once('spawn', resolve);
