@@ -13,7 +13,9 @@ import { enumerateDisplays } from '~main/modules/displays';
 
 const Servers = {
 	live: {
-		realmList: 'octowow.st',
+		// DDoS mitigation: realmlist moved off the main domain, per the
+		// "Update Your Realmlist.wtf" announcement
+		realmList: 'play.octowow.st',
 		patchList: 'octowow.st',
 		realmName: 'OctoWoW'
 	},
