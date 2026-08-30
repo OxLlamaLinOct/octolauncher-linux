@@ -273,24 +273,35 @@ export const warmPrefix = async (): Promise<void> => {
 // background thread early on to create a throwaway window + GL context and
 // probe adapter capabilities (used even for the pure-OpenGL path, since
 // opengl32 shares wined3d's adapter plumbing) - independent of the game's
-// own window. That thread can lose to Wine's nodrv_CreateWindow race just
-// like a real window can, and when its GL context creation fails, WoW.exe's
-// own error handler responds by nulling a "current adapter" pointer that
-// later, unrelated-looking code dereferences with no null check while
-// logging two of its fields - crashing with Error #132 (ACCESS_VIOLATION)
-// before Logs/gx.log ever gets a line written to it. More likely to actually
-// lose the race on higher-latency hosts (cloud/VM) than typical bare-metal
-// desktops, which is why it can look "unfixable" there specifically.
+// own window. That thread can lose Wine's nodrv_CreateWindow race just like
+// a real window can (winediag logs "Application tried to create a window,
+// but no driver could be loaded" / "The explorer process failed to start"
+// when this happens), and when its GL context creation fails as a result,
+// WoW.exe's own error handler responds by nulling a "current adapter"
+// pointer that later, unrelated-looking code dereferences with no null
+// check while logging two of its fields - crashing with Error #132
+// (ACCESS_VIOLATION) before Logs/gx.log ever gets a line written to it.
 //
-// A short-lived, unpinned throwaway launch of the same executable gives
-// wined3d's probe thread one uncontested shot at that race against this same
-// wineserver/prefix before the real (pinned) launch - it doesn't need to
-// fully boot, or even avoid the crash itself, only to let the X11 driver /
-// window-manager side of the race settle once first. Unproven against a
-// genuinely affected machine as of writing - launcher.ts only calls this as
-// a one-time retry after detecting the specific crash signature above, not
+// Confirmed live (2026-08-30) on a KVM VM using virtio-gpu-gl/virgl GPU
+// passthrough: this is the exact same nodrv mechanism, but the race window
+// is wide enough there that a single fixed-duration throwaway launch loses
+// it 100% of the time, not just occasionally - the driver init chain
+// (SPICE -> virgl -> host GBM/EGL) is longer than a native GPU's X11/GLX
+// path, so "wait N seconds and hope" doesn't reliably work on every host.
+// So instead of one timed attempt, this retries a short-lived, unpinned
+// throwaway launch of the target executable until an attempt completes
+// without hitting nodrv (checked by watching its stderr for
+// "nodrv_CreateWindow", which Wine's err-level winediag messages print
+// unconditionally, no WINEDEBUG flags needed), up to a bounded number of
+// tries - giving wider-race-window hosts more real shots at winning it
+// instead of silently giving up after a duration that only happens to be
+// long enough on some machines. Each attempt doesn't need to fully boot the
+// game or even avoid the crash itself, only to let the X11 driver/window-
+// manager side of the race settle once. launcher.ts only calls this as a
+// one-time retry after detecting the specific crash signature above, not
 // unconditionally on every launch.
-const GRAPHICS_WARMUP_TIMEOUT_MS = 10_000;
+const GRAPHICS_WARMUP_ATTEMPT_TIMEOUT_MS = 10_000;
+const GRAPHICS_WARMUP_MAX_ATTEMPTS = 5;
 
 export const warmupGraphics = async (exePath: string): Promise<void> => {
 	if (Proton.status.state !== 'ready') await Proton.verify();
@@ -299,23 +310,43 @@ export const warmupGraphics = async (exePath: string): Promise<void> => {
 	const { selected } = Proton.status;
 	const prefixDir = Proton.getPrefixDir();
 
-	Logger.info('Warming up graphics driver...');
-	await new Promise<void>(resolve => {
-		execFile(
-			'python3',
-			[path.join(selected.protonPath, 'proton'), 'run', exePath],
-			{
-				env: { ...process.env, ...protonEnv(selected, prefixDir) },
-				timeout: GRAPHICS_WARMUP_TIMEOUT_MS
-			},
-			() => {
-				// killed by the timeout (expected) or exited/crashed on its own -
-				// either way only the side effect matters, not the result
-				Logger.info('Graphics warm-up done');
-				resolve();
-			}
+	for (
+		let attempt = 1;
+		attempt <= GRAPHICS_WARMUP_MAX_ATTEMPTS;
+		attempt++
+	) {
+		Logger.info(
+			`Warming up graphics driver (attempt ${attempt}/${GRAPHICS_WARMUP_MAX_ATTEMPTS})...`
 		);
-	});
+		const hitNodrv = await new Promise<boolean>(resolve => {
+			let sawNodrv = false;
+			const child = execFile(
+				'python3',
+				[path.join(selected.protonPath, 'proton'), 'run', exePath],
+				{
+					env: { ...process.env, ...protonEnv(selected, prefixDir) },
+					timeout: GRAPHICS_WARMUP_ATTEMPT_TIMEOUT_MS
+				},
+				() => resolve(sawNodrv)
+			);
+			child.stderr?.on('data', (d: Buffer) => {
+				if (d.toString().includes('nodrv_CreateWindow')) sawNodrv = true;
+			});
+		});
+
+		if (!hitNodrv) {
+			Logger.info('Graphics warm-up succeeded (no nodrv fallback observed)');
+			return;
+		}
+		Logger.warn(
+			`Graphics warm-up attempt ${attempt} hit Wine's nodrv fallback ` +
+				'(X11 driver not ready yet); retrying...'
+		);
+	}
+	Logger.warn(
+		'Graphics warm-up still hitting nodrv fallback after max attempts; ' +
+			'proceeding to the real launch anyway'
+	);
 };
 
 export const getLaunchInvocation = async (
