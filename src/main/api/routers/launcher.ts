@@ -1,6 +1,7 @@
 import path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 
+import { app } from 'electron';
 import fs from 'fs-extra';
 import Logger from 'electron-log/main';
 import { z } from 'zod';
@@ -258,14 +259,17 @@ export const launcherRouter = createTRPCRouter({
 					const child = spawn(invocation.command, invocation.args, {
 						env: { ...process.env, ...invocation.env },
 						cwd: clientDir,
+						// detached so the game survives an unexpected crash of our
+						// own process (or a signal sent to our process group)
+						// instead of dying with us - independent of whether we're
+						// showing a tray icon. Safe to keep stdio piped either way
+						// now: we always wait for the child to actually stop (see
+						// waitForStop below) before quitting, so we never close our
+						// end of these pipes while the child might still write to
+						// them (which used to SIGPIPE a child meant to outlive an
+						// immediate, unconditional quit in the old non-tray path).
 						detached: !minimizeToTrayOnPlay,
-						// a detached child must not keep piped stdio back through
-						// us - closing our end of those pipes when we quit (we
-						// close mainWindow right after this in the non-tray case)
-						// can SIGPIPE the child the next time it writes to
-						// stderr/stdout, killing a process meant to outlive us
-						// within milliseconds of our own exit
-						stdio: minimizeToTrayOnPlay ? 'pipe' : 'ignore'
+						stdio: 'pipe'
 					});
 					if (!minimizeToTrayOnPlay) child.unref();
 
@@ -299,12 +303,16 @@ export const launcherRouter = createTRPCRouter({
 					return { ok: false, error: `Failed to launch the game: ${message}` };
 				}
 
-				if (!minimizeToTrayOnPlay) {
-					mainWindow?.close();
-					return { ok: true };
-				}
-
-				minimizeToTray();
+				// minimizeToTrayOnPlay only controls whether a tray icon/restore
+				// affordance is shown - both configs keep the launcher alive
+				// (invisibly, in the no-tray case) until the game actually stops,
+				// so crash detection and the graphics warm-up retry below work
+				// the same way regardless. Closing mainWindow outright here (the
+				// old no-tray behavior) would fire window-all-closed -> app.quit()
+				// with no other window/tray keeping us alive, tearing down the
+				// whole process before any of this could ever run.
+				if (minimizeToTrayOnPlay) minimizeToTray();
+				else mainWindow?.hide();
 
 				// no exit code from the loader path (VanillaFixes.exe chainloads
 				// WoW.exe, so our child handle isn't the real game process) - can
@@ -358,7 +366,12 @@ export const launcherRouter = createTRPCRouter({
 
 						await handleGameStopped(clientDir, launchedAt, exitInfo);
 					} finally {
-						restoreFromTray();
+						// the no-tray config never showed the window again mid-play
+						// before this fix (it closed outright) - preserve that once
+						// the session is actually over, rather than surprising the
+						// user with a window popping back up they didn't ask for
+						if (minimizeToTrayOnPlay) restoreFromTray();
+						else app.quit();
 					}
 				})();
 				return { ok: true };
